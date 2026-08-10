@@ -156,6 +156,8 @@ func (p *PmonProvider) Resources(ctx context.Context) []func() resource.Resource
 		NewGroupRolesResource,
 		NewGroupMemberResource,
 		NewRoleAssignmentResource,
+		NewMaskFnResource,
+		NewColumnClassificationResource,
 	}
 }
 
