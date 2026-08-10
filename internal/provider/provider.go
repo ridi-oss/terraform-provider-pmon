@@ -5,7 +5,10 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
@@ -23,12 +26,10 @@ import (
 // itself, not any particular deployment.
 const DefaultClientMetadataURL = "https://ridi-oss.github.io/terraform-provider-pmon/client-metadata.json"
 
-// DefaultScopes is every scope the provider can need, and must match what client-metadata.json
-// declares -- pmon rejects an authorization request asking for anything the document does not
-// list. It is not configurable: narrowing the request needs a hook the MCP SDK does not expose at
-// v1.7.0, so the provider takes whatever the protected resource metadata advertises. Scopes are a
-// consent ceiling in any case, never a grant; pmon re-resolves roles and re-evaluates Cedar on
-// every call.
+// DefaultScopes is every scope pmon defines, and must match what client-metadata.json declares:
+// pmon rejects an authorization request asking for anything the document does not list. It doubles
+// as the allowed-value set for the provider's scopes argument, and is what a login asks for when
+// that argument is omitted.
 var DefaultScopes = []string{
 	"mcp:read",
 	"mcp:datasources:write",
@@ -41,6 +42,7 @@ const (
 	envClientMetadataURL = "PMON_CLIENT_METADATA_URL"
 	envTokenCache        = "PMON_TOKEN_CACHE"
 	envNoBrowser         = "PMON_NO_BROWSER"
+	envScopes            = "PMON_SCOPES"
 )
 
 var _ provider.Provider = &PmonProvider{}
@@ -58,6 +60,7 @@ type PmonProviderModel struct {
 	Endpoint          types.String `tfsdk:"endpoint"`
 	ClientMetadataURL types.String `tfsdk:"client_metadata_url"`
 	TokenCachePath    types.String `tfsdk:"token_cache_path"`
+	Scopes            types.Set    `tfsdk:"scopes"`
 }
 
 // Config is the provider configuration after environment fallbacks and defaults are applied.
@@ -66,6 +69,7 @@ type Config struct {
 	ClientMetadataURL string
 	TokenCachePath    string
 	NoBrowser         bool
+	Scopes            []string
 }
 
 func (p *PmonProvider) Metadata(ctx context.Context, req provider.MetadataRequest, resp *provider.MetadataResponse) {
@@ -96,6 +100,17 @@ func (p *PmonProvider) Schema(ctx context.Context, req provider.SchemaRequest, r
 					"the `" + envTokenCache + "` environment variable. Defaults to `~/.pmon/tf-token.json`.",
 				Optional: true,
 			},
+			"scopes": schema.SetAttribute{
+				ElementType: types.StringType,
+				MarkdownDescription: "Caps what a login may ask for. May also be set with the `" +
+					envScopes + "` environment variable, space separated. Omit it to ask for whatever " +
+					"pmon requires. Valid scopes are `" + strings.Join(DefaultScopes, "`, `") + "`.\n\n" +
+					"A scope is a consent ceiling, never a grant: pmon re-resolves your roles and " +
+					"re-evaluates Cedar on every call, so this can only ever subtract. Narrowing it makes " +
+					"a write outside the list fail with `insufficient_scope` instead of prompting for " +
+					"consent, which is how a read-only configuration stays read-only.",
+				Optional: true,
+			},
 		},
 	}
 }
@@ -108,7 +123,7 @@ func (p *PmonProvider) Configure(ctx context.Context, req provider.ConfigureRequ
 		return
 	}
 
-	cfg, diags := resolveConfig(data)
+	cfg, diags := resolveConfig(ctx, data)
 	resp.Diagnostics.Append(diags...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -119,6 +134,7 @@ func (p *PmonProvider) Configure(ctx context.Context, req provider.ConfigureRequ
 		ClientMetadataURL: cfg.ClientMetadataURL,
 		CachePath:         cfg.TokenCachePath,
 		NoBrowser:         cfg.NoBrowser,
+		Scopes:            cfg.Scopes,
 		Progress:          os.Stderr,
 	})
 	if err != nil {
@@ -189,7 +205,7 @@ func New(version string) func() provider.Provider {
 	}
 }
 
-func resolveConfig(data PmonProviderModel) (*Config, diag.Diagnostics) {
+func resolveConfig(ctx context.Context, data PmonProviderModel) (*Config, diag.Diagnostics) {
 	var diags diag.Diagnostics
 
 	// An unknown here means the value comes from another resource's output, which is not available
@@ -208,6 +224,20 @@ func resolveConfig(data PmonProviderModel) (*Config, diag.Diagnostics) {
 			)
 		}
 	}
+	if data.Scopes.IsUnknown() {
+		diags.AddAttributeError(
+			path.Root("scopes"),
+			"Unknown provider configuration",
+			"The pmon provider cannot be configured with unknown scopes. Set them to static values "+
+				"or an input variable, or use the "+envScopes+" environment variable.",
+		)
+	}
+	if diags.HasError() {
+		return nil, diags
+	}
+
+	scopes, scopeDiags := resolveScopes(ctx, data.Scopes)
+	diags.Append(scopeDiags...)
 	if diags.HasError() {
 		return nil, diags
 	}
@@ -217,6 +247,7 @@ func resolveConfig(data PmonProviderModel) (*Config, diag.Diagnostics) {
 		ClientMetadataURL: firstNonEmpty(data.ClientMetadataURL.ValueString(), os.Getenv(envClientMetadataURL), DefaultClientMetadataURL),
 		TokenCachePath:    firstNonEmpty(data.TokenCachePath.ValueString(), os.Getenv(envTokenCache), defaultTokenCachePath()),
 		NoBrowser:         os.Getenv(envNoBrowser) != "",
+		Scopes:            scopes,
 	}
 
 	if cfg.Endpoint == "" {
@@ -249,4 +280,54 @@ func defaultTokenCachePath() string {
 		return ".pmon-tf-token.json"
 	}
 	return filepath.Join(home, ".pmon", "tf-token.json")
+}
+
+// resolveScopes reads the scope ceiling from configuration or the environment, rejecting anything
+// pmon does not define. A typo would otherwise become a login that succeeds and then fails every
+// call with insufficient_scope, which reads nothing like a misspelling.
+func resolveScopes(ctx context.Context, configured types.Set) ([]string, diag.Diagnostics) {
+	var diags diag.Diagnostics
+
+	// An explicitly empty list reads like the tightest possible ceiling but would be the loosest,
+	// since no ceiling is how "unset" is spelled. Refuse it rather than silently invert it.
+	if !configured.IsNull() && len(configured.Elements()) == 0 {
+		diags.AddAttributeError(
+			path.Root("scopes"),
+			"Empty scopes",
+			"An empty scopes list leaves no ceiling at all rather than forbidding everything. Remove "+
+				"the argument to ask for whatever pmon requires, or name the scopes to allow.",
+		)
+		return nil, diags
+	}
+
+	var raw []string
+	if configured.IsNull() {
+		raw = strings.FieldsFunc(os.Getenv(envScopes), func(r rune) bool {
+			return unicode.IsSpace(r) || r == ','
+		})
+	} else {
+		diags.Append(configured.ElementsAs(ctx, &raw, false)...)
+		if diags.HasError() {
+			return nil, diags
+		}
+	}
+
+	scopes := make([]string, 0, len(raw))
+	for _, scope := range raw {
+		scope = strings.TrimSpace(scope)
+		switch {
+		case scope == "":
+			continue
+		case !slices.Contains(DefaultScopes, scope):
+			diags.AddAttributeError(
+				path.Root("scopes"),
+				"Unknown pmon scope",
+				strconv.Quote(scope)+" is not a scope pmon defines. Valid scopes are "+
+					strings.Join(DefaultScopes, ", ")+".",
+			)
+		case !slices.Contains(scopes, scope):
+			scopes = append(scopes, scope)
+		}
+	}
+	return scopes, diags
 }

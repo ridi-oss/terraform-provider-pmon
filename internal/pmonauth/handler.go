@@ -34,6 +34,8 @@ type Options struct {
 	CachePath string
 	// NoBrowser makes a required login fail with ErrBrowserDisabled instead of opening a browser.
 	NoBrowser bool
+	// Scopes caps what a login may ask for. Empty means whatever pmon asks for.
+	Scopes []string
 	// Progress receives human-readable login progress. Nil discards it.
 	Progress io.Writer
 }
@@ -81,6 +83,13 @@ func (h *Handler) TokenSource(ctx context.Context) (oauth2.TokenSource, error) {
 		return nil, nil
 	}
 
+	// A cached token predates the current ceiling. Spending it would let a narrowed scopes
+	// argument keep using the wider grant it was meant to give up.
+	if !scopesWithin(cached.Scopes, h.opts.Scopes) {
+		h.cache.drop(h.opts.Endpoint)
+		return nil, nil
+	}
+
 	cfg := &oauth2.Config{
 		ClientID: cached.ClientID,
 		Scopes:   cached.Scopes,
@@ -113,6 +122,13 @@ func (h *Handler) Authorize(ctx context.Context, req *http.Request, resp *http.R
 			_ = resp.Body.Close()
 		}
 		return ErrBrowserDisabled
+	}
+
+	if err := h.applyScopeCeiling(resp); err != nil {
+		if resp != nil && resp.Body != nil {
+			_ = resp.Body.Close()
+		}
+		return err
 	}
 
 	listener, redirectURL, err := listenLoopback()
@@ -150,6 +166,26 @@ func (h *Handler) Authorize(ctx context.Context, req *http.Request, resp *http.R
 	h.mu.Lock()
 	h.source = source
 	h.mu.Unlock()
+	return nil
+}
+
+// applyScopeCeiling rewrites the challenge in place so the inner handler reads a narrowed scope
+// set. The transport hands the response over before the handler sees it, and that is the only
+// moment at which the request it is about to build can still be capped.
+func (h *Handler) applyScopeCeiling(resp *http.Response) error {
+	if resp == nil || len(h.opts.Scopes) == 0 {
+		return nil
+	}
+
+	narrowed, err := narrowChallenge(resp.Header.Values("WWW-Authenticate"), h.opts.Scopes)
+	if err != nil {
+		return err
+	}
+
+	resp.Header.Del("WWW-Authenticate")
+	for _, value := range narrowed {
+		resp.Header.Add("WWW-Authenticate", value)
+	}
 	return nil
 }
 

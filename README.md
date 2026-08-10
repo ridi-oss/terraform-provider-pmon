@@ -69,9 +69,14 @@ and refreshed without a browser until the refresh token expires.
 Set `PMON_NO_BROWSER=1` to fail with a diagnostic instead of opening a browser.
 
 Scopes are a consent ceiling, never a grant. pmon re-resolves your roles and re-evaluates Cedar
-on every single call, so a token can only ever attempt what you are already entitled to. Because
-the token names a person, every change lands in pmon's audit trail attributed to the human who
-ran it, with `channel=mcp`.
+on every single call, so a token can only ever attempt what you are already entitled to. Set the
+`scopes` argument to lower that ceiling. pmon asks for `mcp:read` up front and re-challenges with
+whatever scope a write turns out to need; the provider caps that challenge at what you listed, so
+a write outside the list fails with `insufficient_scope` rather than asking you to consent to it.
+That is how a read-only configuration stays read-only.
+
+Because the token names a person, every change lands in pmon's audit trail attributed to the human
+who ran it, with `channel=mcp`.
 
 That also makes the provider unsuitable for unattended CI today: refresh tokens are short-lived
 and rotate on every use, so two concurrent runs would invalidate each other.
