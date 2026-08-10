@@ -174,6 +174,10 @@ func (p *PmonProvider) DataSources(ctx context.Context) []func() datasource.Data
 		NewTableDetailDataSource,
 		NewColumnTagsDataSource,
 		NewDatasourceLivenessDataSource,
+		NewDatasourceDataSource,
+		NewRoleDataSource,
+		NewGroupDataSource,
+		NewUserDataSource,
 	}
 }
 

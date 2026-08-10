@@ -25,3 +25,11 @@ func clientFromProviderData(providerData any) (*pmonmcp.Client, diag.Diagnostics
 	}
 	return client, diags
 }
+
+// notFoundDetail explains a singular lookup that matched nothing. A plural data source answers
+// with an empty list, but a reference to one specific object that is not there is a configuration
+// mistake, and the plan should stop where it can still be corrected.
+func notFoundDetail(kind, name, listDataSource string) string {
+	return "pmon has no " + kind + " named " + name + ". Use the " + listDataSource +
+		" data source to see what exists."
+}
