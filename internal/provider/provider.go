@@ -20,9 +20,12 @@ import (
 // itself, not any particular deployment.
 const DefaultClientMetadataURL = "https://ridi-oss.github.io/terraform-provider-pmon/client-metadata.json"
 
-// DefaultScopes is every scope the provider can need. Scopes are a consent ceiling, never a grant:
-// pmon re-resolves the caller's roles and re-evaluates Cedar on every tool call. Narrowing this
-// limits what a run may attempt; it can never widen authority.
+// DefaultScopes is every scope the provider can need, and must match what client-metadata.json
+// declares -- pmon rejects an authorization request asking for anything the document does not
+// list. It is not configurable: narrowing the request needs a hook the MCP SDK does not expose at
+// v1.7.0, so the provider takes whatever the protected resource metadata advertises. Scopes are a
+// consent ceiling in any case, never a grant; pmon re-resolves roles and re-evaluates Cedar on
+// every call.
 var DefaultScopes = []string{
 	"mcp:read",
 	"mcp:datasources:write",
@@ -51,7 +54,6 @@ type PmonProviderModel struct {
 	Endpoint          types.String `tfsdk:"endpoint"`
 	ClientMetadataURL types.String `tfsdk:"client_metadata_url"`
 	TokenCachePath    types.String `tfsdk:"token_cache_path"`
-	Scopes            types.List   `tfsdk:"scopes"`
 }
 
 // Config is the provider configuration after environment fallbacks and defaults are applied.
@@ -59,7 +61,6 @@ type Config struct {
 	Endpoint          string
 	ClientMetadataURL string
 	TokenCachePath    string
-	Scopes            []string
 }
 
 func (p *PmonProvider) Metadata(ctx context.Context, req provider.MetadataRequest, resp *provider.MetadataResponse) {
@@ -90,13 +91,6 @@ func (p *PmonProvider) Schema(ctx context.Context, req provider.SchemaRequest, r
 					"the `" + envTokenCache + "` environment variable. Defaults to `~/.pmon/tf-token.json`.",
 				Optional: true,
 			},
-			"scopes": schema.ListAttribute{
-				MarkdownDescription: "OAuth scopes to request. A scope is a consent ceiling, not a grant: " +
-					"pmon re-evaluates the caller's real authority with Cedar on every call, so narrowing " +
-					"this can only restrict what a run may attempt. Defaults to all four scopes.",
-				Optional:    true,
-				ElementType: types.StringType,
-			},
 		},
 	}
 }
@@ -109,7 +103,7 @@ func (p *PmonProvider) Configure(ctx context.Context, req provider.ConfigureRequ
 		return
 	}
 
-	cfg, diags := resolveConfig(ctx, data)
+	cfg, diags := resolveConfig(data)
 	resp.Diagnostics.Append(diags...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -135,7 +129,7 @@ func New(version string) func() provider.Provider {
 	}
 }
 
-func resolveConfig(ctx context.Context, data PmonProviderModel) (*Config, diag.Diagnostics) {
+func resolveConfig(data PmonProviderModel) (*Config, diag.Diagnostics) {
 	var diags diag.Diagnostics
 
 	// An unknown here means the value comes from another resource's output, which is not available
@@ -162,7 +156,6 @@ func resolveConfig(ctx context.Context, data PmonProviderModel) (*Config, diag.D
 		Endpoint:          firstNonEmpty(data.Endpoint.ValueString(), os.Getenv(envEndpoint)),
 		ClientMetadataURL: firstNonEmpty(data.ClientMetadataURL.ValueString(), os.Getenv(envClientMetadataURL), DefaultClientMetadataURL),
 		TokenCachePath:    firstNonEmpty(data.TokenCachePath.ValueString(), os.Getenv(envTokenCache), defaultTokenCachePath()),
-		Scopes:            DefaultScopes,
 	}
 
 	if cfg.Endpoint == "" {
@@ -172,14 +165,6 @@ func resolveConfig(ctx context.Context, data PmonProviderModel) (*Config, diag.D
 			"Set the endpoint attribute on the provider block or the "+envEndpoint+" environment "+
 				"variable to the pmon MCP endpoint, for example https://pmon.example.com/mcp.",
 		)
-	}
-
-	if !data.Scopes.IsNull() && !data.Scopes.IsUnknown() {
-		var scopes []string
-		diags.Append(data.Scopes.ElementsAs(ctx, &scopes, false)...)
-		if len(scopes) > 0 {
-			cfg.Scopes = scopes
-		}
 	}
 
 	return cfg, diags
