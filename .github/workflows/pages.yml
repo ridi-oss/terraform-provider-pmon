@@ -3,14 +3,15 @@
 # pmon resolves this provider's client_id by fetching it over HTTPS, so it has to be
 # reachable at exactly the URL named inside the document. Pages serves .json as
 # application/json, which pmon requires.
+#
+# Manual only, and deliberately so. The document names ridi-oss.github.io as its own client_id,
+# and pmon compares that against the URL it fetched byte for byte. Run from a repository under
+# any other owner, this publishes a document that fails its own self-reference check -- at the
+# same path a working deployment may already be serving from a branch. Enable the push trigger
+# once the repository owner matches the client_id inside client-metadata.json.
 name: Publish client metadata
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - client-metadata.json
-      - .github/workflows/pages.yml
   workflow_dispatch:
 
 permissions:
