@@ -57,7 +57,7 @@ Required:
 
 - `column` (String) Column to classify.
 - `table` (String) Table holding the column.
-- `tags` (List of String) Tags to attach. Cedar policies match on these, and a column inherits its table's and datasource's tags on top.
+- `tags` (Set of String) Tags to attach. Cedar policies match on these, and a column inherits its table's and datasource's tags on top. A set, because order carries no meaning and comparing as a list would report a reordering as a change.
 
 Optional:
 

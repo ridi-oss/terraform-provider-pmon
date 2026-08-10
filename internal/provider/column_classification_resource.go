@@ -87,9 +87,11 @@ func (r *columnClassificationResource) Schema(ctx context.Context, req resource.
 							MarkdownDescription: "Column to classify.",
 							Required:            true,
 						},
-						"tags": schema.ListAttribute{
+						"tags": schema.SetAttribute{
 							MarkdownDescription: "Tags to attach. Cedar policies match on these, and a " +
-								"column inherits its table's and datasource's tags on top.",
+								"column inherits its table's and datasource's tags on top. A set, because " +
+								"order carries no meaning and comparing as a list would report a " +
+								"reordering as a change.",
 							Required:    true,
 							ElementType: types.StringType,
 						},

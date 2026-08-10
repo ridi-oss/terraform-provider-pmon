@@ -51,10 +51,11 @@ func (r *groupRolesResource) Schema(ctx context.Context, req resource.SchemaRequ
 				Required:      true,
 				PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace()},
 			},
-			"role_names": schema.ListAttribute{
-				MarkdownDescription: "Every role the group should hold. Order does not matter.",
-				Required:            true,
-				ElementType:         types.StringType,
+			"role_names": schema.SetAttribute{
+				MarkdownDescription: "Every role the group should hold. A set, because order carries no " +
+					"meaning here and comparing as a list would report a reordering as a change.",
+				Required:    true,
+				ElementType: types.StringType,
 			},
 		},
 	}
@@ -97,8 +98,8 @@ func (r *groupRolesResource) Read(ctx context.Context, req resource.ReadRequest,
 		return
 	}
 
-	// pmon returns roles in its own order. Sorting both sides keeps a reordering from reading as
-	// drift, while a genuine membership change still shows up.
+	// pmon returns roles in its own order. The attribute is a set, so that order is not compared;
+	// sorting only keeps the state file stable enough to diff by eye.
 	state.RoleNames = sortedCopy(group.RoleNames())
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
