@@ -61,7 +61,10 @@ func (r *columnClassificationResource) Schema(ctx context.Context, req resource.
 			"resource in Tag::\"pii\"` protects nothing on a datasource whose columns carry no tags, so " +
 			"the tags belong next to the policy that depends on them.\n\n" +
 			"Applied as one all-or-nothing batch per datasource, so a rejected entry leaves nothing " +
-			"half-tagged. Tags starting with `system:` are reserved for pmon's own classification.",
+			"half-tagged. Tags starting with `system:` are reserved for pmon's own classification.\n\n" +
+			"Tag drift is detected on refresh. `mask_fn_name` drift is not: pmon's read tools do not " +
+			"report which mask function a column carries, so a change made outside Terraform goes " +
+			"unnoticed until the next apply overwrites it.",
 		Attributes: map[string]schema.Attribute{
 			"datasource": schema.StringAttribute{
 				MarkdownDescription: "Datasource whose columns these are. Changing it replaces the resource.",
@@ -97,7 +100,8 @@ func (r *columnClassificationResource) Schema(ctx context.Context, req resource.
 						},
 						"mask_fn_name": schema.StringAttribute{
 							MarkdownDescription: "Masking function to apply when Cedar decides the column " +
-								"is readable masked. Null leaves pmon's default.",
+								"is readable masked. Null leaves pmon's default. Written on apply but never " +
+								"read back, because pmon's read tools do not report it.",
 							Optional: true,
 						},
 					},
@@ -204,8 +208,10 @@ func (r *columnClassificationResource) Read(ctx context.Context, req resource.Re
 		if !ok {
 			continue
 		}
+		// Tags come back from pmon; mask_fn_name is carried over from state. list_column_tags does
+		// not report a mask function, so overwriting it here would null out a configured one on every
+		// refresh. Mask function drift is therefore not detected -- see the resource description.
 		column.Tags = sortedCopy(found.Tags)
-		column.MaskFnName = stringOrNull(found.MaskFnName)
 		kept = append(kept, column)
 	}
 
@@ -286,12 +292,14 @@ func (r *columnClassificationResource) ImportState(ctx context.Context, req reso
 
 	columns := make([]classifiedColumnModel, 0, len(live))
 	for _, column := range live {
+		// mask_fn_name is left null: an import cannot recover a value pmon does not report. Set it in
+		// the configuration and the next apply writes it.
 		columns = append(columns, classifiedColumnModel{
 			Schema:     types.StringValue(column.Schema),
 			Table:      types.StringValue(column.Table),
 			Column:     types.StringValue(column.Column),
 			Tags:       sortedCopy(column.Tags),
-			MaskFnName: stringOrNull(column.MaskFnName),
+			MaskFnName: types.StringNull(),
 		})
 	}
 	sort.Slice(columns, func(i, j int) bool { return columns[i].key() < columns[j].key() })
