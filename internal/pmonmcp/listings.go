@@ -15,10 +15,11 @@ import (
 type Listings struct {
 	client *Client
 
-	mu     sync.Mutex
-	roles  []Role
-	groups []Group
-	users  []User
+	mu          sync.Mutex
+	roles       []Role
+	groups      []Group
+	users       []User
+	datasources []Datasource
 }
 
 // NewListings returns a cache over client.
@@ -83,6 +84,7 @@ func (l *Listings) Invalidate() {
 	l.roles = nil
 	l.groups = nil
 	l.users = nil
+	l.datasources = nil
 }
 
 // Group returns the named group, and whether it exists.
@@ -111,4 +113,48 @@ func (l *Listings) User(ctx context.Context, principal string) (User, bool, erro
 		}
 	}
 	return User{}, false, nil
+}
+
+// Datasources returns every brokered datasource, listing once per process.
+func (l *Listings) Datasources(ctx context.Context) ([]Datasource, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	if l.datasources != nil {
+		return l.datasources, nil
+	}
+	datasources, err := Call[[]Datasource](ctx, l.client, "list_datasources", map[string]any{})
+	if err != nil {
+		return nil, err
+	}
+	l.datasources = datasources
+	return datasources, nil
+}
+
+// Datasource returns the named datasource, and whether it exists.
+func (l *Listings) Datasource(ctx context.Context, name string) (Datasource, bool, error) {
+	datasources, err := l.Datasources(ctx)
+	if err != nil {
+		return Datasource{}, false, err
+	}
+	for _, datasource := range datasources {
+		if datasource.Name == name {
+			return datasource, true, nil
+		}
+	}
+	return Datasource{}, false, nil
+}
+
+// Role returns the named role, and whether it exists.
+func (l *Listings) Role(ctx context.Context, name string) (Role, bool, error) {
+	roles, err := l.Roles(ctx)
+	if err != nil {
+		return Role{}, false, err
+	}
+	for _, role := range roles {
+		if role.Name == name {
+			return role, true, nil
+		}
+	}
+	return Role{}, false, nil
 }
