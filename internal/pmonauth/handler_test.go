@@ -113,3 +113,31 @@ func TestListenLoopbackMatchesDeclaredRedirect(t *testing.T) {
 		t.Errorf("redirect = %q, want it to end in %q", redirect, callbackPath)
 	}
 }
+
+// A token cached before the ceiling was tightened still carries the wider grant. Reusing it would
+// quietly defeat a narrowed scopes argument, so it is dropped and the next step is a fresh login.
+func TestTokenSourceDropsAnOverScopedEntry(t *testing.T) {
+	opts := testOptions(t)
+	opts.Scopes = []string{"mcp:read"}
+	h, err := NewHandler(opts)
+	if err != nil {
+		t.Fatalf("NewHandler: %v", err)
+	}
+
+	wide := testEntry()
+	wide.Scopes = []string{"mcp:read", "mcp:identity:write"}
+	if err := h.cache.save(opts.Endpoint, wide); err != nil {
+		t.Fatalf("seeding the cache: %v", err)
+	}
+
+	source, err := h.TokenSource(context.Background())
+	if err != nil {
+		t.Fatalf("TokenSource: %v", err)
+	}
+	if source != nil {
+		t.Errorf("TokenSource = %v, want nil so a narrower login runs", source)
+	}
+	if got := h.cache.load(opts.Endpoint); got != nil {
+		t.Errorf("cache still holds %+v, want the over-scoped entry dropped", got)
+	}
+}
