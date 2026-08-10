@@ -23,41 +23,7 @@ retry after a dropped connection cannot apply twice.
 | `pmon_mask_fn` | A masking function. |
 | `pmon_column_classification` | Tags on one datasource's columns. |
 
-## Data sources
-
-| Data source | Reads |
-| --- | --- |
-| `pmon_datasources` | Every brokered datasource, with the tags the proxy pushed. |
-| `pmon_datasource_liveness` | Whether a proxy is attached to one datasource right now. |
-| `pmon_catalog` | Every column in a datasource, with the tags it already carries. |
-| `pmon_table_detail` | One table: columns, foreign keys, size. |
-| `pmon_column_tags` | Only the classified columns of a datasource. |
-| `pmon_policies` / `pmon_policy` | Every Cedar policy, or one by name. |
-| `pmon_policy_schema` | The Cedar schema policies are validated against. |
-| `pmon_roles` / `pmon_groups` / `pmon_users` | The identity estate. |
-
-`pmon_catalog` is what lets a classification be derived rather than typed out:
-
-```terraform
-data "pmon_catalog" "prod" {
-  datasource = "example-prod-rw"
-  schema     = "example"
-}
-
-resource "pmon_column_classification" "prod" {
-  datasource = "example-prod-rw"
-  columns = [
-    for c in data.pmon_catalog.prod.columns : {
-      schema = c.schema, table = c.table, column = c.column, tags = ["pii"]
-    }
-    if anytrue([for p in ["email", "phone", "birthday"] : strcontains(c.column, p)])
-  ]
-}
-```
-
-Filter it. pmon returns the whole catalog in one response and everything that survives the filter
-lands in state. `pmon_users` likewise writes every principal and email address into state; prefer
-`pmon_groups` when entitlements are all you need.
+Data sources: `pmon_datasources`, `pmon_policy`, `pmon_policy_schema`.
 
 ## Authentication
 
@@ -68,29 +34,10 @@ and refreshed without a browser until the refresh token expires.
 
 Set `PMON_NO_BROWSER=1` to fail with a diagnostic instead of opening a browser.
 
-### Using a token you already have
-
-Set `access_token` (or `PMON_ACCESS_TOKEN`) to a pmon token obtained elsewhere and the provider
-presents it instead of logging in: no metadata document is fetched, no browser opens, and nothing
-is written to the token cache, because the token is not this machine's to keep. It is the way in
-while the client metadata document has nowhere public to live, and the only way to run the
-provider where a browser cannot be opened.
-
-pmon issues access tokens with a ten-minute lifetime and rotates the refresh token beside them on
-every use, so the provider takes the access token alone and never renews it. A run that outlives
-one fails with a diagnostic asking for a fresher token; nothing is left half-applied, and the next
-run picks up where it stopped. The token must also already carry the scope a write needs, since
-there is no authorization request left in which to ask for more.
-
 Scopes are a consent ceiling, never a grant. pmon re-resolves your roles and re-evaluates Cedar
-on every single call, so a token can only ever attempt what you are already entitled to. Set the
-`scopes` argument to lower that ceiling. pmon asks for `mcp:read` up front and re-challenges with
-whatever scope a write turns out to need; the provider caps that challenge at what you listed, so
-a write outside the list fails with `insufficient_scope` rather than asking you to consent to it.
-That is how a read-only configuration stays read-only.
-
-Because the token names a person, every change lands in pmon's audit trail attributed to the human
-who ran it, with `channel=mcp`.
+on every single call, so a token can only ever attempt what you are already entitled to. Because
+the token names a person, every change lands in pmon's audit trail attributed to the human who
+ran it, with `channel=mcp`.
 
 That also makes the provider unsuitable for unattended CI today: refresh tokens are short-lived
 and rotate on every use, so two concurrent runs would invalidate each other.
@@ -128,45 +75,28 @@ Shipped `system:` policies, roles, and groups are immutable in pmon and are reje
 Requires Go >= 1.25.
 
 ```shell
-make build      # type-check the module
-make dev        # build bin/terraform-provider-pmon and bin/dev.tfrc
+make build      # compile
 make test       # unit tests
 make lint       # golangci-lint
 make generate   # regenerate docs/ from examples/ and the schema
-make install    # install into $GOBIN
+make install    # install into $GOBIN for dev_overrides
 ```
 
 Run `make generate` after any schema change: CI fails if `docs/` is out of date.
 
-To run a local build:
+To use a local build, point Terraform at your `$GOBIN` in `~/.terraformrc`:
 
-```shell
-make dev
-export TF_CLI_CONFIG_FILE=$PWD/bin/dev.tfrc
+```hcl
+provider_installation {
+  dev_overrides {
+    "ridi-oss/pmon" = "/Users/user/go/bin"
+  }
+  direct {}
+}
 ```
-
-### Logging in
-
-`bin/pmon-login` runs the same login the provider runs, from a terminal:
-
-```shell
-export PMON_ENDPOINT=https://pmon.example.com/mcp
-bin/pmon-login
-```
-
-Prefer it to letting the first `terraform plan` log in. The provider runs as a Terraform plugin,
-and Terraform captures a plugin's stderr into its own log, so the authorization URL never reaches
-the terminal. That goes unnoticed while the browser opens by itself, and turns into a five-minute
-stall the moment it does not. `pmon-login` prints the URL where you can see it, and the plan after
-it finds a cached token and needs no browser.
-
-`bin/dev.tfrc` is a `dev_overrides` block mapping `ridi-oss/pmon` to `bin/`, and both files are
-gitignored. Overriding the CLI config file beats editing `~/.terraformrc`: the override lasts only
-as long as the shell that exported it, and it still works where a config manager owns
-`~/.terraformrc` as a read-only symlink.
 
 With `dev_overrides` in place, skip `terraform init` -- Terraform uses the local binary and writes
-no lock file. Terraform prints a warning on every command to say so, which is expected.
+no lock file.
 
 Acceptance tests create real infrastructure and are gated behind `TF_ACC`:
 
