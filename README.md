@@ -23,7 +23,41 @@ retry after a dropped connection cannot apply twice.
 | `pmon_mask_fn` | A masking function. |
 | `pmon_column_classification` | Tags on one datasource's columns. |
 
-Data sources: `pmon_datasources`, `pmon_policy`, `pmon_policy_schema`.
+## Data sources
+
+| Data source | Reads |
+| --- | --- |
+| `pmon_datasources` | Every brokered datasource, with the tags the proxy pushed. |
+| `pmon_datasource_liveness` | Whether a proxy is attached to one datasource right now. |
+| `pmon_catalog` | Every column in a datasource, with the tags it already carries. |
+| `pmon_table_detail` | One table: columns, foreign keys, size. |
+| `pmon_column_tags` | Only the classified columns of a datasource. |
+| `pmon_policies` / `pmon_policy` | Every Cedar policy, or one by name. |
+| `pmon_policy_schema` | The Cedar schema policies are validated against. |
+| `pmon_roles` / `pmon_groups` / `pmon_users` | The identity estate. |
+
+`pmon_catalog` is what lets a classification be derived rather than typed out:
+
+```terraform
+data "pmon_catalog" "prod" {
+  datasource = "example-prod-rw"
+  schema     = "example"
+}
+
+resource "pmon_column_classification" "prod" {
+  datasource = "example-prod-rw"
+  columns = [
+    for c in data.pmon_catalog.prod.columns : {
+      schema = c.schema, table = c.table, column = c.column, tags = ["pii"]
+    }
+    if anytrue([for p in ["email", "phone", "birthday"] : strcontains(c.column, p)])
+  ]
+}
+```
+
+Filter it. pmon returns the whole catalog in one response and everything that survives the filter
+lands in state. `pmon_users` likewise writes every principal and email address into state; prefer
+`pmon_groups` when entitlements are all you need.
 
 ## Authentication
 
