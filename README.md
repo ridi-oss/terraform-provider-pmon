@@ -68,6 +68,48 @@ and refreshed without a browser until the refresh token expires.
 
 Set `PMON_NO_BROWSER=1` to fail with a diagnostic instead of opening a browser.
 
+### Hosting the client metadata document
+
+pmon has no dynamic client registration. It identifies a client by fetching the document at the
+`client_id` URL, on every authorization request, and that document has to name the same URL back.
+Running this provider therefore means publishing one small JSON file somewhere pmon can reach.
+
+`client-metadata.json` in this repository is that document, and the provider defaults to the URL
+it names. **That URL is a 404 until the project moves to its final home**, so today you have to
+point the provider at a copy you host:
+
+```shell
+export PMON_CLIENT_METADATA_URL=https://your-host.example.com/client-metadata.json
+```
+
+or, equivalently, in the provider block:
+
+```terraform
+provider "pmon" {
+  client_metadata_url = "https://your-host.example.com/client-metadata.json"
+}
+```
+
+To publish a copy: take `client-metadata.json`, set `client_id` to the exact URL it will be served
+from, and serve it so every one of these holds. pmon enforces all of them, and rejects the client
+outright when one fails.
+
+| Requirement | What it rules out |
+| --- | --- |
+| `https://`, with a path, no query, no fragment, no `.` or `..` segments | plain HTTP, bare hostnames |
+| `Content-Type: application/json` or `application/…+json` | GitHub raw and gist raw, which serve `text/plain` |
+| A direct `200`, no redirect | `gist.github.com/…/raw/…`, which 301s to another host |
+| `client_id` byte-identical to the URL fetched | a copy moved without editing the field |
+| 5 KiB or smaller, answered inside 5 seconds | anything slow; pmon re-fetches on every authorization and caches nothing |
+| Resolves to a public address | Tailscale (`100.64.0.0/10`) and every other private range |
+
+GitHub Pages satisfies all of it and introduces no party you are not already trusting with the
+source. A repository with the file at its root, Pages serving that branch, gives you
+`https://<owner>.github.io/<repo>/client-metadata.json`.
+
+`.github/workflows/pages.yml` deploys this repository's own copy, and is manual-only: it would
+otherwise publish a document naming a `client_id` that does not match wherever this fork lives.
+
 ### Using a token you already have
 
 Set `access_token` (or `PMON_ACCESS_TOKEN`) to a pmon token obtained elsewhere and the provider
