@@ -68,6 +68,20 @@ and refreshed without a browser until the refresh token expires.
 
 Set `PMON_NO_BROWSER=1` to fail with a diagnostic instead of opening a browser.
 
+### Using a token you already have
+
+Set `access_token` (or `PMON_ACCESS_TOKEN`) to a pmon token obtained elsewhere and the provider
+presents it instead of logging in: no metadata document is fetched, no browser opens, and nothing
+is written to the token cache, because the token is not this machine's to keep. It is the way in
+while the client metadata document has nowhere public to live, and the only way to run the
+provider where a browser cannot be opened.
+
+pmon issues access tokens with a ten-minute lifetime and rotates the refresh token beside them on
+every use, so the provider takes the access token alone and never renews it. A run that outlives
+one fails with a diagnostic asking for a fresher token; nothing is left half-applied, and the next
+run picks up where it stopped. The token must also already carry the scope a write needs, since
+there is no authorization request left in which to ask for more.
+
 Scopes are a consent ceiling, never a grant. pmon re-resolves your roles and re-evaluates Cedar
 on every single call, so a token can only ever attempt what you are already entitled to. Set the
 `scopes` argument to lower that ceiling. pmon asks for `mcp:read` up front and re-challenges with

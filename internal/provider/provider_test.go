@@ -15,6 +15,7 @@ func nullModel() PmonProviderModel {
 		ClientMetadataURL: types.StringNull(),
 		TokenCachePath:    types.StringNull(),
 		Scopes:            types.SetNull(types.StringType),
+		AccessToken:       types.StringNull(),
 	}
 }
 
@@ -142,5 +143,63 @@ func TestResolveScopesRejectsAnEmptyList(t *testing.T) {
 
 	if _, diags := resolveConfig(context.Background(), model); !diags.HasError() {
 		t.Fatal("expected a diagnostic: an empty list is the loosest ceiling, not the tightest")
+	}
+}
+
+func TestResolveAccessTokenFromEnv(t *testing.T) {
+	t.Setenv(envEndpoint, "https://pmon.example.com/mcp")
+	t.Setenv(envAccessToken, "borrowed-token")
+
+	cfg, diags := resolveConfig(context.Background(), nullModel())
+	if diags.HasError() {
+		t.Fatalf("unexpected diagnostics: %v", diags)
+	}
+	if cfg.AccessToken != "borrowed-token" {
+		t.Errorf("access token = %q", cfg.AccessToken)
+	}
+}
+
+// A token pasted out of a terminal often arrives with a newline attached. Left alone it corrupts
+// the Authorization header, and the error that comes back names nothing useful.
+func TestResolveAccessTokenRejectsInternalWhitespace(t *testing.T) {
+	t.Setenv(envEndpoint, "https://pmon.example.com/mcp")
+
+	model := nullModel()
+	model.AccessToken = types.StringValue("borrowed token")
+
+	if _, diags := resolveConfig(context.Background(), model); !diags.HasError() {
+		t.Fatal("expected a diagnostic for a token containing whitespace")
+	}
+}
+
+// Surrounding whitespace is the copy-paste, not the token.
+func TestResolveAccessTokenTrimsSurroundingWhitespace(t *testing.T) {
+	t.Setenv(envEndpoint, "https://pmon.example.com/mcp")
+	t.Setenv(envAccessToken, "  borrowed-token\n")
+
+	cfg, diags := resolveConfig(context.Background(), nullModel())
+	if diags.HasError() {
+		t.Fatalf("unexpected diagnostics: %v", diags)
+	}
+	if cfg.AccessToken != "borrowed-token" {
+		t.Errorf("access token = %q, want it trimmed", cfg.AccessToken)
+	}
+}
+
+// scopes shapes an authorization request, and a supplied token means there is none to shape.
+// Silently ignoring it would read as a ceiling that is in force when it is not.
+func TestResolveConfigWarnsWhenScopesCannotApply(t *testing.T) {
+	t.Setenv(envEndpoint, "https://pmon.example.com/mcp")
+
+	model := nullModel()
+	model.AccessToken = types.StringValue("borrowed-token")
+	model.Scopes = scopeSet("mcp:read")
+
+	_, diags := resolveConfig(context.Background(), model)
+	if diags.HasError() {
+		t.Fatalf("unexpected error diagnostics: %v", diags)
+	}
+	if diags.WarningsCount() != 1 {
+		t.Errorf("warnings = %d, want 1 saying scopes cannot apply", diags.WarningsCount())
 	}
 }
