@@ -11,6 +11,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/ridi-oss/terraform-provider-pmon/internal/pmonmcp"
 )
@@ -121,11 +122,11 @@ func (r *columnClassificationResource) Configure(ctx context.Context, req resour
 // the limit, a reserved tag, or the same column named twice, which pmon treats as an error rather
 // than last-one-wins because the result could not say which tag set decided masking.
 func (r *columnClassificationResource) ValidateConfig(ctx context.Context, req resource.ValidateConfigRequest, resp *resource.ValidateConfigResponse) {
-	var config columnClassificationResourceModel
-	resp.Diagnostics.Append(req.Config.Get(ctx, &config)...)
-	if resp.Diagnostics.HasError() {
+	columns, ok := configuredColumns(ctx, req.Config)
+	if !ok {
 		return
 	}
+	config := columnClassificationResourceModel{Columns: columns}
 
 	if len(config.Columns) > maxClassificationBatch {
 		resp.Diagnostics.AddAttributeError(
@@ -349,4 +350,29 @@ func (r *columnClassificationResource) clear(ctx context.Context, datasource str
 		args["schema"] = column.Schema.ValueString()
 	}
 	return pmonmcp.Do(ctx, r.client, "clear_column_classification", args)
+}
+
+// configuredColumns pulls the column set out of a configuration for validation, reporting false
+// when there is nothing concrete to check.
+//
+// The set is routinely built by a `for` expression over pmon_catalog, which leaves it unknown
+// until the data source has been read. A plain slice of models cannot hold an unknown, so reading
+// the config straight into one turns the provider's own most useful pattern into a crash. These
+// checks only bring pmon's answer forward anyway: the batch is validated on write, and a rejected
+// batch applies nothing.
+func configuredColumns(ctx context.Context, config tfsdk.Config) ([]classifiedColumnModel, bool) {
+	var raw types.Set
+	if diags := config.GetAttribute(ctx, path.Root("columns"), &raw); diags.HasError() {
+		return nil, false
+	}
+	if raw.IsNull() || raw.IsUnknown() {
+		return nil, false
+	}
+
+	var columns []classifiedColumnModel
+	if diags := raw.ElementsAs(ctx, &columns, false); diags.HasError() {
+		// An individual element is not concrete yet either. Same reasoning: leave it to the write.
+		return nil, false
+	}
+	return columns, true
 }
