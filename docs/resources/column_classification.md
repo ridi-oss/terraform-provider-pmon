@@ -6,6 +6,7 @@ description: |-
   Tags on one datasource's columns.
   This is the load-bearing half of every PII policy. A preset that reads everything unless resource in Tag::"pii" protects nothing on a datasource whose columns carry no tags, so the tags belong next to the policy that depends on them.
   Applied as one all-or-nothing batch per datasource, so a rejected entry leaves nothing half-tagged. Tags starting with system: are reserved for pmon's own classification.
+  Tag drift is detected on refresh. mask_fn_name drift is not: pmon's read tools do not report which mask function a column carries, so a change made outside Terraform goes unnoticed until the next apply overwrites it.
 ---
 
 # pmon_column_classification (Resource)
@@ -15,6 +16,8 @@ Tags on one datasource's columns.
 This is the load-bearing half of every PII policy. A preset that reads everything `unless resource in Tag::"pii"` protects nothing on a datasource whose columns carry no tags, so the tags belong next to the policy that depends on them.
 
 Applied as one all-or-nothing batch per datasource, so a rejected entry leaves nothing half-tagged. Tags starting with `system:` are reserved for pmon's own classification.
+
+Tag drift is detected on refresh. `mask_fn_name` drift is not: pmon's read tools do not report which mask function a column carries, so a change made outside Terraform goes unnoticed until the next apply overwrites it.
 
 ## Example Usage
 
@@ -61,7 +64,7 @@ Required:
 
 Optional:
 
-- `mask_fn_name` (String) Masking function to apply when Cedar decides the column is readable masked. Null leaves pmon's default.
+- `mask_fn_name` (String) Masking function to apply when Cedar decides the column is readable masked. Null leaves pmon's default. Written on apply but never read back, because pmon's read tools do not report it.
 - `schema` (String) Schema holding the table. Optional when the datasource declares a default schema.
 
 ## Import
