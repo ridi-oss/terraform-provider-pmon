@@ -149,7 +149,10 @@ func (p *PmonProvider) Configure(ctx context.Context, req provider.ConfigureRequ
 }
 
 func (p *PmonProvider) Resources(ctx context.Context) []func() resource.Resource {
-	return []func() resource.Resource{}
+	return []func() resource.Resource{
+		NewPolicyResource,
+		NewRoleResource,
+	}
 }
 
 func (p *PmonProvider) DataSources(ctx context.Context) []func() datasource.DataSource {
