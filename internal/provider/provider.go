@@ -386,3 +386,22 @@ func resolveScopes(ctx context.Context, configured types.Set) ([]string, diag.Di
 	}
 	return scopes, diags
 }
+
+// ConfigFromEnv resolves provider configuration with nothing set in HCL, so every value comes
+// from an environment variable or a default. It exists so a command-line helper cannot drift
+// from what the provider itself would do with the same environment.
+func ConfigFromEnv(ctx context.Context) (*Config, diag.Diagnostics) {
+	return resolveConfig(ctx, PmonProviderModel{
+		Endpoint:          types.StringNull(),
+		ClientMetadataURL: types.StringNull(),
+		TokenCachePath:    types.StringNull(),
+		Scopes:            types.SetNull(types.StringType),
+		AccessToken:       types.StringNull(),
+	})
+}
+
+// NewAuthHandler exposes the provider's own choice between logging in and presenting a supplied
+// token, for the same reason ConfigFromEnv exists.
+func NewAuthHandler(cfg *Config) (auth.OAuthHandler, error) {
+	return newAuthHandler(cfg)
+}
