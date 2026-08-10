@@ -12,6 +12,7 @@ install: build
 dev:
 	mkdir -p bin
 	go build -o bin/terraform-provider-pmon .
+	go build -o bin/pmon-login ./cmd/pmon-login
 	printf 'provider_installation {\n  dev_overrides {\n    "ridi-oss/pmon" = "%s"\n  }\n  direct {}\n}\n' '$(CURDIR)/bin' > bin/dev.tfrc
 	@echo 'built. now: export TF_CLI_CONFIG_FILE=$(CURDIR)/bin/dev.tfrc'
 

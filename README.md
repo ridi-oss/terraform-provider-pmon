@@ -145,6 +145,21 @@ make dev
 export TF_CLI_CONFIG_FILE=$PWD/bin/dev.tfrc
 ```
 
+### Logging in
+
+`bin/pmon-login` runs the same login the provider runs, from a terminal:
+
+```shell
+export PMON_ENDPOINT=https://pmon.example.com/mcp
+bin/pmon-login
+```
+
+Prefer it to letting the first `terraform plan` log in. The provider runs as a Terraform plugin,
+and Terraform captures a plugin's stderr into its own log, so the authorization URL never reaches
+the terminal. That goes unnoticed while the browser opens by itself, and turns into a five-minute
+stall the moment it does not. `pmon-login` prints the URL where you can see it, and the plan after
+it finds a cached token and needs no browser.
+
 `bin/dev.tfrc` is a `dev_overrides` block mapping `ridi-oss/pmon` to `bin/`, and both files are
 gitignored. Overriding the CLI config file beats editing `~/.terraformrc`: the override lasts only
 as long as the shell that exported it, and it still works where a config manager owns

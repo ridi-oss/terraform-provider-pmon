@@ -2,11 +2,13 @@ package provider
 
 import (
 	"context"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/types"
+	"github.com/ridi-oss/terraform-provider-pmon/internal/pmonauth"
 )
 
 func nullModel() PmonProviderModel {
@@ -201,5 +203,57 @@ func TestResolveConfigWarnsWhenScopesCannotApply(t *testing.T) {
 	}
 	if diags.WarningsCount() != 1 {
 		t.Errorf("warnings = %d, want 1 saying scopes cannot apply", diags.WarningsCount())
+	}
+}
+
+// The helper command resolves its configuration through this, so it has to agree with the
+// provider about every environment variable and default.
+func TestConfigFromEnv(t *testing.T) {
+	t.Setenv(envEndpoint, "https://pmon.example.com/mcp")
+	t.Setenv(envClientMetadataURL, "")
+	t.Setenv(envTokenCache, "")
+	t.Setenv(envAccessToken, "")
+	t.Setenv(envScopes, "")
+
+	cfg, diags := ConfigFromEnv(context.Background())
+	if diags.HasError() {
+		t.Fatalf("unexpected diagnostics: %v", diags)
+	}
+	if cfg.Endpoint != "https://pmon.example.com/mcp" {
+		t.Errorf("endpoint = %q", cfg.Endpoint)
+	}
+	if cfg.ClientMetadataURL != DefaultClientMetadataURL {
+		t.Errorf("client metadata URL = %q, want the default", cfg.ClientMetadataURL)
+	}
+}
+
+// A supplied token has to take the static path, or the helper would open a browser for a session
+// that already has a credential.
+func TestNewAuthHandlerPrefersASuppliedToken(t *testing.T) {
+	handler, err := NewAuthHandler(&Config{
+		Endpoint:          "https://pmon.example.com/mcp",
+		ClientMetadataURL: DefaultClientMetadataURL,
+		TokenCachePath:    filepath.Join(t.TempDir(), "token.json"),
+		AccessToken:       "borrowed-token",
+	})
+	if err != nil {
+		t.Fatalf("NewAuthHandler: %v", err)
+	}
+	if _, ok := handler.(*pmonauth.StaticHandler); !ok {
+		t.Errorf("handler = %T, want *pmonauth.StaticHandler", handler)
+	}
+}
+
+func TestNewAuthHandlerLogsInWithoutTheToken(t *testing.T) {
+	handler, err := NewAuthHandler(&Config{
+		Endpoint:          "https://pmon.example.com/mcp",
+		ClientMetadataURL: DefaultClientMetadataURL,
+		TokenCachePath:    filepath.Join(t.TempDir(), "token.json"),
+	})
+	if err != nil {
+		t.Fatalf("NewAuthHandler: %v", err)
+	}
+	if _, ok := handler.(*pmonauth.Handler); !ok {
+		t.Errorf("handler = %T, want *pmonauth.Handler", handler)
 	}
 }
