@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"sync"
 
 	"github.com/modelcontextprotocol/go-sdk/auth"
@@ -197,16 +198,45 @@ func (h *Handler) newTokenSource(ctx context.Context, cfg *oauth2.Config, token 
 	return &persistingSource{handler: h, config: cfg, base: cfg.TokenSource(ctx, token), last: token}, nil
 }
 
+// storeFrom writes a rotation back only when src is still the handler's source. A step-up login
+// replaces that source with one holding a wider grant, and the transport can still be holding the
+// one it replaced. Letting the old one write would put its narrower scope list back beside the
+// newer token, and scopesWithin would then read an understatement of what the token can do.
+func (h *Handler) storeFrom(src oauth2.TokenSource, cfg *oauth2.Config, token *oauth2.Token) {
+	h.mu.Lock()
+	superseded := h.source != nil && h.source != src
+	h.mu.Unlock()
+	if superseded {
+		return
+	}
+	h.store(cfg, token)
+}
+
 func (h *Handler) store(cfg *oauth2.Config, token *oauth2.Token) {
 	err := h.cache.save(h.opts.Endpoint, &entry{
 		TokenURL: cfg.Endpoint.TokenURL,
 		ClientID: cfg.ClientID,
-		Scopes:   cfg.Scopes,
+		Scopes:   grantedScopes(cfg, token),
 		Token:    token,
 	})
 	if err != nil {
 		h.notify(fmt.Sprintf("Could not cache the pmon token, the next run will log in again: %v", err))
 	}
+}
+
+// grantedScopes reports what the token can actually do, preferring the authorization server's
+// answer to the client's request. RFC 6749 section 5.1 has the token response carry its own
+// `scope` whenever the grant differs from what was asked for, and pmon sends it on every
+// response. The request is only a fallback, for a server that stays silent.
+func grantedScopes(cfg *oauth2.Config, token *oauth2.Token) []string {
+	if token != nil {
+		if scope, ok := token.Extra("scope").(string); ok {
+			if granted := strings.Fields(scope); len(granted) > 0 {
+				return granted
+			}
+		}
+	}
+	return cfg.Scopes
 }
 
 func (h *Handler) notify(message string) {
@@ -239,7 +269,7 @@ func (s *persistingSource) Token() (*oauth2.Token, error) {
 	s.mu.Unlock()
 
 	if rotated {
-		s.handler.store(s.config, token)
+		s.handler.storeFrom(s, s.config, token)
 	}
 	return token, nil
 }
