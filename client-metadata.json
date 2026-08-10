@@ -1,0 +1,18 @@
+{
+  "client_id": "https://sanggyu-ridi.github.io/terraform-provider-pmon/client-metadata.json",
+  "client_name": "terraform-provider-pmon",
+  "client_uri": "https://github.com/ridi-oss/proxy-monster",
+  "redirect_uris": [
+    "http://localhost/callback",
+    "http://127.0.0.1/callback"
+  ],
+  "grant_types": [
+    "authorization_code",
+    "refresh_token"
+  ],
+  "response_types": [
+    "code"
+  ],
+  "token_endpoint_auth_method": "none",
+  "scope": "mcp:read mcp:datasources:write mcp:policies:write mcp:identity:write"
+}
