@@ -152,6 +152,10 @@ func (p *PmonProvider) Resources(ctx context.Context) []func() resource.Resource
 	return []func() resource.Resource{
 		NewPolicyResource,
 		NewRoleResource,
+		NewGroupResource,
+		NewGroupRolesResource,
+		NewGroupMemberResource,
+		NewRoleAssignmentResource,
 	}
 }
 

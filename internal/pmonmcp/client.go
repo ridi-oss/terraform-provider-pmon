@@ -35,6 +35,7 @@ type Options struct {
 type Client struct {
 	session  *mcp.ClientSession
 	endpoint string
+	listings *Listings
 }
 
 // Connect opens and initializes an MCP session.
@@ -72,7 +73,14 @@ func Connect(ctx context.Context, opts Options) (*Client, error) {
 		return nil, fmt.Errorf("connecting to the pmon MCP endpoint %s: %w", opts.Endpoint, err)
 	}
 
-	return &Client{session: session, endpoint: opts.Endpoint}, nil
+	connected := &Client{session: session, endpoint: opts.Endpoint}
+	connected.listings = NewListings(connected)
+	return connected, nil
+}
+
+// Listings returns the process-lifetime cache over this client's list tools.
+func (c *Client) Listings() *Listings {
+	return c.listings
 }
 
 // Endpoint reports the endpoint this client is connected to.
