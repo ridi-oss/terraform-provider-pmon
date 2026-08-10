@@ -42,7 +42,7 @@ resource "pmon_group_roles" "developers" {
 ### Required
 
 - `group_name` (String) Group whose roles these are. Changing it moves the binding, so the resource is replaced.
-- `role_names` (List of String) Every role the group should hold. Order does not matter.
+- `role_names` (Set of String) Every role the group should hold. A set, because order carries no meaning here and comparing as a list would report a reordering as a change.
 
 ## Import
 
