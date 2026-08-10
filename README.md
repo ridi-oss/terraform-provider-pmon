@@ -128,28 +128,30 @@ Shipped `system:` policies, roles, and groups are immutable in pmon and are reje
 Requires Go >= 1.25.
 
 ```shell
-make build      # compile
+make build      # type-check the module
+make dev        # build bin/terraform-provider-pmon and bin/dev.tfrc
 make test       # unit tests
 make lint       # golangci-lint
 make generate   # regenerate docs/ from examples/ and the schema
-make install    # install into $GOBIN for dev_overrides
+make install    # install into $GOBIN
 ```
 
 Run `make generate` after any schema change: CI fails if `docs/` is out of date.
 
-To use a local build, point Terraform at your `$GOBIN` in `~/.terraformrc`:
+To run a local build:
 
-```hcl
-provider_installation {
-  dev_overrides {
-    "ridi-oss/pmon" = "/Users/user/go/bin"
-  }
-  direct {}
-}
+```shell
+make dev
+export TF_CLI_CONFIG_FILE=$PWD/bin/dev.tfrc
 ```
 
+`bin/dev.tfrc` is a `dev_overrides` block mapping `ridi-oss/pmon` to `bin/`, and both files are
+gitignored. Overriding the CLI config file beats editing `~/.terraformrc`: the override lasts only
+as long as the shell that exported it, and it still works where a config manager owns
+`~/.terraformrc` as a read-only symlink.
+
 With `dev_overrides` in place, skip `terraform init` -- Terraform uses the local binary and writes
-no lock file.
+no lock file. Terraform prints a warning on every command to say so, which is expected.
 
 Acceptance tests create real infrastructure and are gated behind `TF_ACC`:
 
