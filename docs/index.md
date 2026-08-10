@@ -29,5 +29,4 @@ provider "pmon" {
 
 - `client_metadata_url` (String) HTTPS URL of the OAuth Client ID Metadata Document that identifies this provider to pmon's authorization server. May also be set with the `PMON_CLIENT_METADATA_URL` environment variable. Defaults to `https://ridi-oss.github.io/terraform-provider-pmon/client-metadata.json`.
 - `endpoint` (String) pmon MCP endpoint, for example `https://pmon.example.com/mcp`. May also be set with the `PMON_ENDPOINT` environment variable.
-- `scopes` (List of String) OAuth scopes to request. A scope is a consent ceiling, not a grant: pmon re-evaluates the caller's real authority with Cedar on every call, so narrowing this can only restrict what a run may attempt. Defaults to all four scopes.
 - `token_cache_path` (String) Where the OAuth token is cached between runs. May also be set with the `PMON_TOKEN_CACHE` environment variable. Defaults to `~/.pmon/tf-token.json`.
