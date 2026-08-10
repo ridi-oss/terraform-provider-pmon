@@ -17,31 +17,31 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types"
 )
 
-// Ensure ScaffoldingProvider satisfies various provider interfaces.
-var _ provider.Provider = &ScaffoldingProvider{}
-var _ provider.ProviderWithFunctions = &ScaffoldingProvider{}
-var _ provider.ProviderWithEphemeralResources = &ScaffoldingProvider{}
-var _ provider.ProviderWithActions = &ScaffoldingProvider{}
+// Ensure PmonProvider satisfies various provider interfaces.
+var _ provider.Provider = &PmonProvider{}
+var _ provider.ProviderWithFunctions = &PmonProvider{}
+var _ provider.ProviderWithEphemeralResources = &PmonProvider{}
+var _ provider.ProviderWithActions = &PmonProvider{}
 
-// ScaffoldingProvider defines the provider implementation.
-type ScaffoldingProvider struct {
+// PmonProvider defines the provider implementation.
+type PmonProvider struct {
 	// version is set to the provider version on release, "dev" when the
 	// provider is built and ran locally, and "test" when running acceptance
 	// testing.
 	version string
 }
 
-// ScaffoldingProviderModel describes the provider data model.
-type ScaffoldingProviderModel struct {
+// PmonProviderModel describes the provider data model.
+type PmonProviderModel struct {
 	Endpoint types.String `tfsdk:"endpoint"`
 }
 
-func (p *ScaffoldingProvider) Metadata(ctx context.Context, req provider.MetadataRequest, resp *provider.MetadataResponse) {
-	resp.TypeName = "scaffolding"
+func (p *PmonProvider) Metadata(ctx context.Context, req provider.MetadataRequest, resp *provider.MetadataResponse) {
+	resp.TypeName = "pmon"
 	resp.Version = p.version
 }
 
-func (p *ScaffoldingProvider) Schema(ctx context.Context, req provider.SchemaRequest, resp *provider.SchemaResponse) {
+func (p *PmonProvider) Schema(ctx context.Context, req provider.SchemaRequest, resp *provider.SchemaResponse) {
 	resp.Schema = schema.Schema{
 		Attributes: map[string]schema.Attribute{
 			"endpoint": schema.StringAttribute{
@@ -52,8 +52,8 @@ func (p *ScaffoldingProvider) Schema(ctx context.Context, req provider.SchemaReq
 	}
 }
 
-func (p *ScaffoldingProvider) Configure(ctx context.Context, req provider.ConfigureRequest, resp *provider.ConfigureResponse) {
-	var data ScaffoldingProviderModel
+func (p *PmonProvider) Configure(ctx context.Context, req provider.ConfigureRequest, resp *provider.ConfigureResponse) {
+	var data PmonProviderModel
 
 	resp.Diagnostics.Append(req.Config.Get(ctx, &data)...)
 
@@ -70,31 +70,31 @@ func (p *ScaffoldingProvider) Configure(ctx context.Context, req provider.Config
 	resp.ResourceData = client
 }
 
-func (p *ScaffoldingProvider) Resources(ctx context.Context) []func() resource.Resource {
+func (p *PmonProvider) Resources(ctx context.Context) []func() resource.Resource {
 	return []func() resource.Resource{
 		NewExampleResource,
 	}
 }
 
-func (p *ScaffoldingProvider) EphemeralResources(ctx context.Context) []func() ephemeral.EphemeralResource {
+func (p *PmonProvider) EphemeralResources(ctx context.Context) []func() ephemeral.EphemeralResource {
 	return []func() ephemeral.EphemeralResource{
 		NewExampleEphemeralResource,
 	}
 }
 
-func (p *ScaffoldingProvider) DataSources(ctx context.Context) []func() datasource.DataSource {
+func (p *PmonProvider) DataSources(ctx context.Context) []func() datasource.DataSource {
 	return []func() datasource.DataSource{
 		NewExampleDataSource,
 	}
 }
 
-func (p *ScaffoldingProvider) Functions(ctx context.Context) []func() function.Function {
+func (p *PmonProvider) Functions(ctx context.Context) []func() function.Function {
 	return []func() function.Function{
 		NewExampleFunction,
 	}
 }
 
-func (p *ScaffoldingProvider) Actions(ctx context.Context) []func() action.Action {
+func (p *PmonProvider) Actions(ctx context.Context) []func() action.Action {
 	return []func() action.Action{
 		NewExampleAction,
 	}
@@ -102,7 +102,7 @@ func (p *ScaffoldingProvider) Actions(ctx context.Context) []func() action.Actio
 
 func New(version string) func() provider.Provider {
 	return func() provider.Provider {
-		return &ScaffoldingProvider{
+		return &PmonProvider{
 			version: version,
 		}
 	}
