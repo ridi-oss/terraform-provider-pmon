@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,6 +14,8 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/provider/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/types"
+	"github.com/ridi-oss/terraform-provider-pmon/internal/pmonauth"
+	"github.com/ridi-oss/terraform-provider-pmon/internal/pmonmcp"
 )
 
 // DefaultClientMetadataURL identifies this provider to a pmon authorization server. pmon registers
@@ -37,6 +40,7 @@ const (
 	envEndpoint          = "PMON_ENDPOINT"
 	envClientMetadataURL = "PMON_CLIENT_METADATA_URL"
 	envTokenCache        = "PMON_TOKEN_CACHE"
+	envNoBrowser         = "PMON_NO_BROWSER"
 )
 
 var _ provider.Provider = &PmonProvider{}
@@ -61,6 +65,7 @@ type Config struct {
 	Endpoint          string
 	ClientMetadataURL string
 	TokenCachePath    string
+	NoBrowser         bool
 }
 
 func (p *PmonProvider) Metadata(ctx context.Context, req provider.MetadataRequest, resp *provider.MetadataResponse) {
@@ -109,8 +114,38 @@ func (p *PmonProvider) Configure(ctx context.Context, req provider.ConfigureRequ
 		return
 	}
 
-	resp.DataSourceData = cfg
-	resp.ResourceData = cfg
+	handler, err := pmonauth.NewHandler(pmonauth.Options{
+		Endpoint:          cfg.Endpoint,
+		ClientMetadataURL: cfg.ClientMetadataURL,
+		CachePath:         cfg.TokenCachePath,
+		NoBrowser:         cfg.NoBrowser,
+		Progress:          os.Stderr,
+	})
+	if err != nil {
+		resp.Diagnostics.AddError("Cannot prepare pmon authentication", err.Error())
+		return
+	}
+
+	// Connecting performs the MCP initialize handshake, which is what triggers the login. Doing it
+	// here means one login per provider process, rather than whenever the first resource happens
+	// to be read.
+	client, err := pmonmcp.Connect(ctx, pmonmcp.Options{
+		Endpoint: cfg.Endpoint,
+		OAuth:    handler,
+		Version:  p.version,
+	})
+	if err != nil {
+		detail := err.Error()
+		if errors.Is(err, pmonauth.ErrBrowserDisabled) {
+			detail += "\n\nUnset " + envNoBrowser + " to log in with a browser. There is no non-interactive " +
+				"credential for pmon's MCP endpoint yet, so an unattended run cannot authenticate."
+		}
+		resp.Diagnostics.AddError("Cannot reach pmon at "+cfg.Endpoint, detail)
+		return
+	}
+
+	resp.DataSourceData = client
+	resp.ResourceData = client
 }
 
 func (p *PmonProvider) Resources(ctx context.Context) []func() resource.Resource {
@@ -118,7 +153,11 @@ func (p *PmonProvider) Resources(ctx context.Context) []func() resource.Resource
 }
 
 func (p *PmonProvider) DataSources(ctx context.Context) []func() datasource.DataSource {
-	return []func() datasource.DataSource{}
+	return []func() datasource.DataSource{
+		NewDatasourcesDataSource,
+		NewPolicyDataSource,
+		NewPolicySchemaDataSource,
+	}
 }
 
 func New(version string) func() provider.Provider {
@@ -156,6 +195,7 @@ func resolveConfig(data PmonProviderModel) (*Config, diag.Diagnostics) {
 		Endpoint:          firstNonEmpty(data.Endpoint.ValueString(), os.Getenv(envEndpoint)),
 		ClientMetadataURL: firstNonEmpty(data.ClientMetadataURL.ValueString(), os.Getenv(envClientMetadataURL), DefaultClientMetadataURL),
 		TokenCachePath:    firstNonEmpty(data.TokenCachePath.ValueString(), os.Getenv(envTokenCache), defaultTokenCachePath()),
+		NoBrowser:         os.Getenv(envNoBrowser) != "",
 	}
 
 	if cfg.Endpoint == "" {
