@@ -19,6 +19,11 @@ provider "pmon" {
   # Optional: narrow what this configuration is allowed to attempt. Scopes are a
   # consent ceiling; pmon still evaluates Cedar for the real decision.
   scopes = ["mcp:read", "mcp:policies:write"]
+
+  # Optional: present a token obtained elsewhere instead of logging in, for hosts where
+  # no browser can be opened. Prefer PMON_ACCESS_TOKEN over writing it here -- pmon expires
+  # these after ten minutes and the provider cannot renew them.
+  # access_token = var.pmon_access_token
 }
 ```
 
@@ -27,6 +32,9 @@ provider "pmon" {
 
 ### Optional
 
+- `access_token` (String, Sensitive) A pmon access token obtained elsewhere, presented instead of logging in. May also be set with the `PMON_ACCESS_TOKEN` environment variable.
+
+Setting it skips the authorization-code flow outright: no client metadata document is fetched, no browser opens, and nothing is written to the token cache. pmon access tokens last ten minutes by default and cannot be renewed from here, so a run that outlives one fails and needs a fresher token. The token must already carry the scope a write needs, and `scopes` has no effect beside it, because there is no authorization request left to shape.
 - `client_metadata_url` (String) HTTPS URL of the OAuth Client ID Metadata Document that identifies this provider to pmon's authorization server. May also be set with the `PMON_CLIENT_METADATA_URL` environment variable. Defaults to `https://ridi-oss.github.io/terraform-provider-pmon/client-metadata.json`.
 - `endpoint` (String) pmon MCP endpoint, for example `https://pmon.example.com/mcp`. May also be set with the `PMON_ENDPOINT` environment variable.
 - `scopes` (Set of String) Caps what a login may ask for. May also be set with the `PMON_SCOPES` environment variable, space separated. Omit it to ask for whatever pmon requires. Valid scopes are `mcp:read`, `mcp:datasources:write`, `mcp:policies:write`, `mcp:identity:write`.

@@ -17,6 +17,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/provider/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/types"
+	"github.com/modelcontextprotocol/go-sdk/auth"
 	"github.com/ridi-oss/terraform-provider-pmon/internal/pmonauth"
 	"github.com/ridi-oss/terraform-provider-pmon/internal/pmonmcp"
 )
@@ -43,6 +44,7 @@ const (
 	envTokenCache        = "PMON_TOKEN_CACHE"
 	envNoBrowser         = "PMON_NO_BROWSER"
 	envScopes            = "PMON_SCOPES"
+	envAccessToken       = "PMON_ACCESS_TOKEN"
 )
 
 var _ provider.Provider = &PmonProvider{}
@@ -61,6 +63,7 @@ type PmonProviderModel struct {
 	ClientMetadataURL types.String `tfsdk:"client_metadata_url"`
 	TokenCachePath    types.String `tfsdk:"token_cache_path"`
 	Scopes            types.Set    `tfsdk:"scopes"`
+	AccessToken       types.String `tfsdk:"access_token"`
 }
 
 // Config is the provider configuration after environment fallbacks and defaults are applied.
@@ -70,6 +73,7 @@ type Config struct {
 	TokenCachePath    string
 	NoBrowser         bool
 	Scopes            []string
+	AccessToken       string
 }
 
 func (p *PmonProvider) Metadata(ctx context.Context, req provider.MetadataRequest, resp *provider.MetadataResponse) {
@@ -111,6 +115,19 @@ func (p *PmonProvider) Schema(ctx context.Context, req provider.SchemaRequest, r
 					"consent, which is how a read-only configuration stays read-only.",
 				Optional: true,
 			},
+			"access_token": schema.StringAttribute{
+				MarkdownDescription: "A pmon access token obtained elsewhere, presented instead of " +
+					"logging in. May also be set with the `" + envAccessToken + "` environment " +
+					"variable.\n\n" +
+					"Setting it skips the authorization-code flow outright: no client metadata document " +
+					"is fetched, no browser opens, and nothing is written to the token cache. pmon " +
+					"access tokens last ten minutes by default and cannot be renewed from here, so a run " +
+					"that outlives one fails and needs a fresher token. The token must already carry the " +
+					"scope a write needs, and `scopes` has no effect beside it, because there is no " +
+					"authorization request left to shape.",
+				Optional:  true,
+				Sensitive: true,
+			},
 		},
 	}
 }
@@ -129,14 +146,7 @@ func (p *PmonProvider) Configure(ctx context.Context, req provider.ConfigureRequ
 		return
 	}
 
-	handler, err := pmonauth.NewHandler(pmonauth.Options{
-		Endpoint:          cfg.Endpoint,
-		ClientMetadataURL: cfg.ClientMetadataURL,
-		CachePath:         cfg.TokenCachePath,
-		NoBrowser:         cfg.NoBrowser,
-		Scopes:            cfg.Scopes,
-		Progress:          os.Stderr,
-	})
+	handler, err := newAuthHandler(cfg)
 	if err != nil {
 		resp.Diagnostics.AddError("Cannot prepare pmon authentication", err.Error())
 		return
@@ -153,8 +163,12 @@ func (p *PmonProvider) Configure(ctx context.Context, req provider.ConfigureRequ
 	if err != nil {
 		detail := err.Error()
 		if errors.Is(err, pmonauth.ErrBrowserDisabled) {
-			detail += "\n\nUnset " + envNoBrowser + " to log in with a browser. There is no non-interactive " +
-				"credential for pmon's MCP endpoint yet, so an unattended run cannot authenticate."
+			detail += "\n\nUnset " + envNoBrowser + " to log in with a browser, or set access_token to a " +
+				"token obtained elsewhere."
+		}
+		if errors.Is(err, pmonauth.ErrStaticTokenRejected) {
+			detail += "\n\npmon access tokens last ten minutes and this one cannot be renewed from here. " +
+				"Supply a fresher token in access_token or " + envAccessToken + "."
 		}
 		resp.Diagnostics.AddError("Cannot reach pmon at "+cfg.Endpoint, detail)
 		return
@@ -197,6 +211,23 @@ func (p *PmonProvider) DataSources(ctx context.Context) []func() datasource.Data
 	}
 }
 
+// newAuthHandler picks how the session authenticates. A supplied token replaces the login
+// rather than seeding it: there is no refresh token beside it, so there would be nothing for the
+// cache to hold and nothing for a later run to renew.
+func newAuthHandler(cfg *Config) (auth.OAuthHandler, error) {
+	if cfg.AccessToken != "" {
+		return pmonauth.NewStaticHandler(cfg.AccessToken)
+	}
+	return pmonauth.NewHandler(pmonauth.Options{
+		Endpoint:          cfg.Endpoint,
+		ClientMetadataURL: cfg.ClientMetadataURL,
+		CachePath:         cfg.TokenCachePath,
+		NoBrowser:         cfg.NoBrowser,
+		Scopes:            cfg.Scopes,
+		Progress:          os.Stderr,
+	})
+}
+
 func New(version string) func() provider.Provider {
 	return func() provider.Provider {
 		return &PmonProvider{
@@ -214,6 +245,7 @@ func resolveConfig(ctx context.Context, data PmonProviderModel) (*Config, diag.D
 		"endpoint":            data.Endpoint,
 		"client_metadata_url": data.ClientMetadataURL,
 		"token_cache_path":    data.TokenCachePath,
+		"access_token":        data.AccessToken,
 	} {
 		if attr.IsUnknown() {
 			diags.AddAttributeError(
@@ -248,6 +280,29 @@ func resolveConfig(ctx context.Context, data PmonProviderModel) (*Config, diag.D
 		TokenCachePath:    firstNonEmpty(data.TokenCachePath.ValueString(), os.Getenv(envTokenCache), defaultTokenCachePath()),
 		NoBrowser:         os.Getenv(envNoBrowser) != "",
 		Scopes:            scopes,
+		AccessToken:       firstNonEmpty(data.AccessToken.ValueString(), os.Getenv(envAccessToken)),
+	}
+
+	// A token pasted out of a terminal usually arrives with a newline attached. firstNonEmpty has
+	// already trimmed the ends; anything left would corrupt the Authorization header, and what
+	// comes back from that names nothing an operator could act on.
+	if strings.ContainsFunc(cfg.AccessToken, unicode.IsSpace) {
+		diags.AddAttributeError(
+			path.Root("access_token"),
+			"Malformed pmon access token",
+			"The access token contains whitespace. Check that it was copied whole and without a "+
+				"line break in the middle.",
+		)
+	}
+
+	if cfg.AccessToken != "" && len(cfg.Scopes) > 0 {
+		diags.AddAttributeWarning(
+			path.Root("scopes"),
+			"scopes has no effect beside access_token",
+			"scopes caps what a login asks for, and a supplied access token means no login runs. "+
+				"The token's own scopes are what pmon enforces. Remove scopes, or remove access_token "+
+				"to let the provider log in under the ceiling.",
+		)
 	}
 
 	if cfg.Endpoint == "" {
