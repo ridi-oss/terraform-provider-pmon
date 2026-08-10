@@ -7,6 +7,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"golang.org/x/oauth2"
 )
 
 func testOptions(t *testing.T) Options {
@@ -139,5 +142,99 @@ func TestTokenSourceDropsAnOverScopedEntry(t *testing.T) {
 	}
 	if got := h.cache.load(opts.Endpoint); got != nil {
 		t.Errorf("cache still holds %+v, want the over-scoped entry dropped", got)
+	}
+}
+
+// pmon answers the token request with the scope it actually granted, which is not always the
+// scope that was asked for -- a step-up asks for one scope and comes back with the union. The
+// cache has to hold what the token can do, because that is what the ceiling check reads.
+func TestStoreRecordsTheGrantedScope(t *testing.T) {
+	opts := testOptions(t)
+	h, err := NewHandler(opts)
+	if err != nil {
+		t.Fatalf("NewHandler: %v", err)
+	}
+
+	cfg := &oauth2.Config{
+		ClientID: "https://example.github.io/client-metadata.json",
+		Scopes:   []string{"mcp:identity:write"}, // what the step-up asked for
+		Endpoint: oauth2.Endpoint{TokenURL: "https://pmon.example.com/oauth/token"},
+	}
+	token := (&oauth2.Token{AccessToken: "a", RefreshToken: "r", Expiry: time.Now().Add(time.Hour)}).
+		WithExtra(map[string]any{"scope": "mcp:read mcp:identity:write"}) // what pmon granted
+
+	h.store(cfg, token)
+
+	cached := h.cache.load(opts.Endpoint)
+	if cached == nil {
+		t.Fatal("nothing cached")
+	}
+	if got := strings.Join(cached.Scopes, " "); got != "mcp:read mcp:identity:write" {
+		t.Errorf("cached scopes = %q, want the granted set, not the requested one", got)
+	}
+}
+
+// Without a scope in the response there is nothing better to record than the request.
+func TestStoreFallsBackToTheRequestedScope(t *testing.T) {
+	opts := testOptions(t)
+	h, err := NewHandler(opts)
+	if err != nil {
+		t.Fatalf("NewHandler: %v", err)
+	}
+
+	cfg := &oauth2.Config{
+		ClientID: "https://example.github.io/client-metadata.json",
+		Scopes:   []string{"mcp:read"},
+		Endpoint: oauth2.Endpoint{TokenURL: "https://pmon.example.com/oauth/token"},
+	}
+	h.store(cfg, &oauth2.Token{AccessToken: "a", Expiry: time.Now().Add(time.Hour)})
+
+	cached := h.cache.load(opts.Endpoint)
+	if cached == nil {
+		t.Fatal("nothing cached")
+	}
+	if got := strings.Join(cached.Scopes, " "); got != "mcp:read" {
+		t.Errorf("cached scopes = %q, want the requested set", got)
+	}
+}
+
+// The regression this was written for: a step-up widens the grant, and the source it replaced is
+// still live in the transport. When that one rotates it must not put its narrower scopes back.
+func TestSupersededSourceDoesNotOverwriteTheCache(t *testing.T) {
+	opts := testOptions(t)
+	h, err := NewHandler(opts)
+	if err != nil {
+		t.Fatalf("NewHandler: %v", err)
+	}
+
+	narrow := &oauth2.Config{
+		ClientID: "https://example.github.io/client-metadata.json",
+		Scopes:   []string{"mcp:read"},
+		Endpoint: oauth2.Endpoint{TokenURL: "https://pmon.example.com/oauth/token"},
+	}
+	stale := &persistingSource{handler: h, config: narrow}
+
+	// The step-up result: a wider grant, and the handler now points at the source holding it.
+	wide := &oauth2.Config{
+		ClientID: narrow.ClientID,
+		Scopes:   []string{"mcp:read", "mcp:identity:write"},
+		Endpoint: narrow.Endpoint,
+	}
+	current := &persistingSource{handler: h, config: wide}
+	h.source = current
+	h.store(wide, &oauth2.Token{AccessToken: "wide", Expiry: time.Now().Add(time.Hour)})
+
+	// The transport still holds the old source, and its token rotates.
+	stale.handler.storeFrom(stale, stale.config, &oauth2.Token{AccessToken: "rotated", Expiry: time.Now().Add(time.Hour)})
+
+	cached := h.cache.load(opts.Endpoint)
+	if cached == nil {
+		t.Fatal("nothing cached")
+	}
+	if got := strings.Join(cached.Scopes, " "); got != "mcp:read mcp:identity:write" {
+		t.Errorf("cached scopes = %q, want the step-up grant left intact", got)
+	}
+	if cached.Token.AccessToken != "wide" {
+		t.Errorf("cached token = %q, want the superseded source to have written nothing", cached.Token.AccessToken)
 	}
 }
