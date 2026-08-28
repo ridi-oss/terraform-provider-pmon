@@ -238,3 +238,45 @@ func TestSupersededSourceDoesNotOverwriteTheCache(t *testing.T) {
 		t.Errorf("cached token = %q, want the superseded source to have written nothing", cached.Token.AccessToken)
 	}
 }
+
+func TestBeginLogin(t *testing.T) {
+	for name, tc := range map[string]struct {
+		granted []string
+		asked   string
+		raced   bool
+		want    bool
+	}{
+		"nobody logged in while the caller waited":  {granted: []string{"mcp:read"}, asked: "mcp:read", raced: false, want: true},
+		"the finished login covers the challenge":   {granted: []string{"mcp:read"}, asked: "mcp:read", raced: true, want: false},
+		"the finished login is narrower than asked": {granted: []string{"mcp:read"}, asked: "mcp:identity:write", raced: true, want: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h, err := NewHandler(testOptions(t))
+			if err != nil {
+				t.Fatalf("NewHandler: %v", err)
+			}
+
+			before := h.currentSource()
+			if tc.raced {
+				h.mu.Lock()
+				h.source = &persistingSource{handler: h}
+				h.mu.Unlock()
+				if err := h.cache.save(h.opts.Endpoint, &entry{
+					Scopes: tc.granted,
+					Token:  &oauth2.Token{AccessToken: "fresh"},
+				}); err != nil {
+					t.Fatalf("save: %v", err)
+				}
+			}
+
+			resp := &http.Response{Header: http.Header{}}
+			resp.Header.Set("WWW-Authenticate", `Bearer error="insufficient_scope", scope="`+tc.asked+`"`)
+
+			release, needed := h.beginLogin(before, resp)
+			defer release()
+			if needed != tc.want {
+				t.Errorf("beginLogin needed = %v, want %v", needed, tc.want)
+			}
+		})
+	}
+}

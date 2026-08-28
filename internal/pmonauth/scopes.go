@@ -99,3 +99,17 @@ func formatChallenge(challenge oauthex.Challenge) string {
 	}
 	return challenge.Scheme + " " + strings.Join(parts, ", ")
 }
+
+func challengeScopes(headers []string) []string {
+	challenges, err := oauthex.ParseWWWAuthenticate(headers)
+	if err != nil {
+		return nil
+	}
+	var asked []string
+	for _, challenge := range challenges {
+		if challenge.Scheme == "bearer" {
+			asked = append(asked, strings.Fields(challenge.Params["scope"])...)
+		}
+	}
+	return asked
+}
