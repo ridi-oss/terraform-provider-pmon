@@ -47,6 +47,11 @@ type Handler struct {
 	opts  Options
 	cache *cache
 
+	// login serializes the authorization-code flow. Terraform calls tools concurrently, so a
+	// token that expires mid-run draws one 401 per in-flight request, and each one would
+	// otherwise open its own browser tab and its own loopback listener.
+	login sync.Mutex
+
 	mu     sync.Mutex
 	source oauth2.TokenSource
 }
@@ -115,6 +120,39 @@ func (h *Handler) TokenSource(ctx context.Context) (oauth2.TokenSource, error) {
 	return h.source, nil
 }
 
+// currentSource reports the source the handler holds, which is how a caller waiting on the login
+// lock tells a login that finished ahead of it from one that never ran.
+func (h *Handler) currentSource() oauth2.TokenSource {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.source
+}
+
+func (h *Handler) grantCovers(resp *http.Response) bool {
+	if resp == nil {
+		return false
+	}
+	asked := challengeScopes(resp.Header.Values("WWW-Authenticate"))
+	cached := h.cache.load(h.opts.Endpoint)
+	if len(asked) == 0 || cached == nil || len(cached.Scopes) == 0 {
+		return false
+	}
+	return scopesWithin(asked, cached.Scopes)
+}
+
+// beginLogin takes the login lock and reports whether the caller still has to log in. A source
+// that changed while the caller waited is a login another goroutine already completed, and the
+// transport retries the request once after Authorize returns, so a caller whose scopes that login
+// covered gets its token without a second trip to the browser.
+func (h *Handler) beginLogin(before oauth2.TokenSource, resp *http.Response) (release func(), needed bool) {
+	h.login.Lock()
+	if h.currentSource() != before && h.grantCovers(resp) {
+		h.login.Unlock()
+		return func() {}, false
+	}
+	return h.login.Unlock, true
+}
+
 // Authorize runs the authorization-code flow: discovery, CIMD registration, PKCE, and a browser
 // round trip. The transport calls it after a 401 and retries the request once it returns nil.
 func (h *Handler) Authorize(ctx context.Context, req *http.Request, resp *http.Response) error {
@@ -123,6 +161,15 @@ func (h *Handler) Authorize(ctx context.Context, req *http.Request, resp *http.R
 			_ = resp.Body.Close()
 		}
 		return ErrBrowserDisabled
+	}
+
+	release, needed := h.beginLogin(h.currentSource(), resp)
+	defer release()
+	if !needed {
+		if resp != nil && resp.Body != nil {
+			_ = resp.Body.Close()
+		}
+		return nil
 	}
 
 	if err := h.applyScopeCeiling(resp); err != nil {
