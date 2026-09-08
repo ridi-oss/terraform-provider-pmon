@@ -1,11 +1,11 @@
 module github.com/ridi-oss/terraform-provider-pmon
 
-go 1.25.8
+go 1.26.0
 
 require (
 	github.com/hashicorp/terraform-plugin-framework v1.19.0
 	github.com/modelcontextprotocol/go-sdk v1.7.0
-	golang.org/x/oauth2 v0.36.0
+	golang.org/x/oauth2 v0.37.0
 )
 
 require (
