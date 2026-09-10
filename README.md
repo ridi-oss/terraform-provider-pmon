@@ -165,6 +165,21 @@ resource "pmon_policy" "service_fence" {
 Shipped `system:` policies, roles, and groups are immutable in pmon and are rejected during
 `plan` rather than mid-apply.
 
+## Renaming a group used by role bindings
+
+`pmon_group_roles` records the group's stable `group_id` and follows that ID during refresh.
+Before renaming an existing group, run a refresh-only plan and apply it with this provider version.
+Check that the binding's state contains `group_id`; older state only contains the name.
+
+Rename the group in pmon, update `group_name` in Terraform, and add a `moved` block if the resource
+address also uses the old name. The next plan should preserve the group ID and role set without
+replacing the binding. Changing `group_name` without first renaming the same group still replaces
+the binding. This resource manages roles, not the group name itself.
+
+For OIDC groups, coordinate the rename with the IdP. A login carrying the old name can create a
+new group under that name, and a login carrying the new name before the rename can claim the
+target name. Pause affected sign-ins until both names match.
+
 ## Development
 
 Requires Go >= 1.25.

@@ -41,8 +41,12 @@ resource "pmon_group_roles" "developers" {
 
 ### Required
 
-- `group_name` (String) Group whose roles these are. Changing it moves the binding, so the resource is replaced.
+- `group_name` (String) Group whose roles these are. Changing this value in configuration replaces the binding. An external rename of the same group is followed by ID during refresh; update this value to the new name at the same time.
 - `role_names` (Set of String) Every role the group should hold. A set, because order carries no meaning here and comparing as a list would report a reordering as a change.
+
+### Read-Only
+
+- `group_id` (Number) The group's stable ID. Refresh the binding before renaming a group outside Terraform so subsequent refreshes follow that identity.
 
 ## Import
 

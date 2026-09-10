@@ -40,16 +40,16 @@ output "production_viewers" {
 
 ### Read-Only
 
-- `groups` (Attributes List) The groups, as pmon reports them. (see [below for nested schema](#nestedatt--groups))
+- `groups` (List of Object) The groups, as pmon reports them. Each object contains `id` (pmon's internal id), `name`, `description` (nullable), `source` (`LOCAL`, `OIDC`, or `SYSTEM`), `member_count`, and `role_names` (a sorted list of strings). (see [below for nested schema](#nestedatt--groups))
 
 <a id="nestedatt--groups"></a>
 ### Nested Schema for `groups`
 
 Read-Only:
 
-- `description` (String) What the group is for.
-- `id` (Number) pmon's internal id.
-- `member_count` (Number) How many members the group has.
-- `name` (String) Group name.
-- `role_names` (List of String) Roles the group carries, sorted.
-- `source` (String) `LOCAL` for a group created here, `OIDC` for one provisioned from the IdP group claim, `SYSTEM` for a shipped group.
+- `description` (String)
+- `id` (Number)
+- `member_count` (Number)
+- `name` (String)
+- `role_names` (List of String)
+- `source` (String)

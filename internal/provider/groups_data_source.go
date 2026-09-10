@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 
+	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/datasource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/types"
@@ -45,39 +46,20 @@ func (d *groupsDataSource) Schema(ctx context.Context, req datasource.SchemaRequ
 			"through groups rather than direct assignments. `member_count` is all pmon reports here; " +
 			"use `pmon_users` to see which principals those are.",
 		Attributes: map[string]schema.Attribute{
-			"groups": schema.ListNestedAttribute{
-				MarkdownDescription: "The groups, as pmon reports them.",
-				Computed:            true,
-				NestedObject: schema.NestedAttributeObject{
-					Attributes: map[string]schema.Attribute{
-						"id": schema.Int64Attribute{
-							MarkdownDescription: "pmon's internal id.",
-							Computed:            true,
-						},
-						"name": schema.StringAttribute{
-							MarkdownDescription: "Group name.",
-							Computed:            true,
-						},
-						"description": schema.StringAttribute{
-							MarkdownDescription: "What the group is for.",
-							Computed:            true,
-						},
-						"source": schema.StringAttribute{
-							MarkdownDescription: "`LOCAL` for a group created here, `OIDC` for one " +
-								"provisioned from the IdP group claim, `SYSTEM` for a shipped group.",
-							Computed: true,
-						},
-						"member_count": schema.Int64Attribute{
-							MarkdownDescription: "How many members the group has.",
-							Computed:            true,
-						},
-						"role_names": schema.ListAttribute{
-							MarkdownDescription: "Roles the group carries, sorted.",
-							Computed:            true,
-							ElementType:         types.StringType,
-						},
-					},
-				},
+			"groups": schema.ListAttribute{
+				MarkdownDescription: "The groups, as pmon reports them. Each object contains " +
+					"`id` (pmon's internal id), `name`, `description` (nullable), " +
+					"`source` (`LOCAL`, `OIDC`, or `SYSTEM`), `member_count`, and " +
+					"`role_names` (a sorted list of strings).",
+				Computed: true,
+				ElementType: types.ObjectType{AttrTypes: map[string]attr.Type{
+					"id":           types.Int64Type,
+					"name":         types.StringType,
+					"description":  types.StringType,
+					"source":       types.StringType,
+					"member_count": types.Int64Type,
+					"role_names":   types.ListType{ElemType: types.StringType},
+				}},
 			},
 		},
 	}

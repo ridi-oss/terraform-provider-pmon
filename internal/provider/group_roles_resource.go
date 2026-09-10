@@ -2,12 +2,14 @@ package provider
 
 import (
 	"context"
+	"fmt"
 	"sort"
 	"strings"
 
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
@@ -28,6 +30,7 @@ type groupRolesResource struct {
 }
 
 type groupRolesResourceModel struct {
+	GroupID   types.Int64  `tfsdk:"group_id"`
 	GroupName types.String `tfsdk:"group_name"`
 	RoleNames []string     `tfsdk:"role_names"`
 }
@@ -45,9 +48,16 @@ func (r *groupRolesResource) Schema(ctx context.Context, req resource.SchemaRequ
 			"This works on an `OIDC` group too, which is the usual way an IdP-provisioned team gets its " +
 			"entitlements without the membership being managed here.",
 		Attributes: map[string]schema.Attribute{
+			"group_id": schema.Int64Attribute{
+				MarkdownDescription: "The group's stable ID. Refresh the binding before renaming a group " +
+					"outside Terraform so subsequent refreshes follow that identity.",
+				Computed:      true,
+				PlanModifiers: []planmodifier.Int64{int64planmodifier.UseStateForUnknown()},
+			},
 			"group_name": schema.StringAttribute{
-				MarkdownDescription: "Group whose roles these are. Changing it moves the binding, so the " +
-					"resource is replaced.",
+				MarkdownDescription: "Group whose roles these are. Changing this value in configuration " +
+					"replaces the binding. An external rename of the same group is followed by ID during refresh; " +
+					"update this value to the new name at the same time.",
 				Required:      true,
 				PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace()},
 			},
@@ -74,10 +84,12 @@ func (r *groupRolesResource) Create(ctx context.Context, req resource.CreateRequ
 		return
 	}
 
-	if err := r.set(ctx, plan.GroupName.ValueString(), plan.RoleNames); err != nil {
+	groupID, err := r.set(ctx, plan.GroupName.ValueString(), plan.RoleNames, plan.GroupID)
+	if err != nil {
 		resp.Diagnostics.AddError("Cannot set the roles of the pmon group "+plan.GroupName.ValueString(), updateErrorDetail(err))
 		return
 	}
+	plan.GroupID = types.Int64Value(groupID)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
@@ -88,15 +100,18 @@ func (r *groupRolesResource) Read(ctx context.Context, req resource.ReadRequest,
 		return
 	}
 
-	group, found, err := r.client.Listings().Group(ctx, state.GroupName.ValueString())
+	groups, err := r.client.Listings().Groups(ctx)
 	if err != nil {
 		resp.Diagnostics.AddError("Cannot list pmon groups", err.Error())
 		return
 	}
+	group, found := groupForBinding(groups, state)
 	if !found {
 		resp.State.RemoveResource(ctx)
 		return
 	}
+	state.GroupID = types.Int64Value(group.ID)
+	state.GroupName = types.StringValue(group.Name)
 
 	// pmon returns roles in its own order. The attribute is a set, so that order is not compared;
 	// sorting only keeps the state file stable enough to diff by eye.
@@ -111,10 +126,12 @@ func (r *groupRolesResource) Update(ctx context.Context, req resource.UpdateRequ
 		return
 	}
 
-	if err := r.set(ctx, plan.GroupName.ValueString(), plan.RoleNames); err != nil {
+	groupID, err := r.set(ctx, plan.GroupName.ValueString(), plan.RoleNames, plan.GroupID)
+	if err != nil {
 		resp.Diagnostics.AddError("Cannot set the roles of the pmon group "+plan.GroupName.ValueString(), updateErrorDetail(err))
 		return
 	}
+	plan.GroupID = types.Int64Value(groupID)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
@@ -126,7 +143,16 @@ func (r *groupRolesResource) Delete(ctx context.Context, req resource.DeleteRequ
 		return
 	}
 
-	err := r.set(ctx, state.GroupName.ValueString(), []string{})
+	groups, err := r.client.Listings().Groups(ctx)
+	if err != nil {
+		resp.Diagnostics.AddError("Cannot list pmon groups", err.Error())
+		return
+	}
+	group, found := groupForBinding(groups, state)
+	if !found {
+		return
+	}
+	_, err = r.set(ctx, group.Name, []string{}, types.Int64Value(group.ID))
 	if err != nil && !isNotFound(err) {
 		resp.Diagnostics.AddError("Cannot clear the roles of the pmon group "+state.GroupName.ValueString(), updateErrorDetail(err))
 	}
@@ -136,20 +162,43 @@ func (r *groupRolesResource) ImportState(ctx context.Context, req resource.Impor
 	resource.ImportStatePassthroughID(ctx, path.Root("group_name"), req, resp)
 }
 
-func (r *groupRolesResource) set(ctx context.Context, group string, roles []string) error {
+func (r *groupRolesResource) set(ctx context.Context, group string, roles []string, expectedID types.Int64) (int64, error) {
+	found, exists, err := r.client.Listings().Group(ctx, group)
+	if err != nil {
+		return 0, err
+	}
+	if !exists {
+		return 0, fmt.Errorf("group %q does not exist", group)
+	}
+	if !expectedID.IsNull() && !expectedID.IsUnknown() && found.ID != expectedID.ValueInt64() {
+		return 0, fmt.Errorf("group %q has ID %d, expected %d; refresh and review the plan before retrying", group, found.ID, expectedID.ValueInt64())
+	}
 	if roles == nil {
 		roles = []string{}
 	}
-	err := pmonmcp.Do(ctx, r.client, "set_group_roles", map[string]any{
+	err = pmonmcp.Do(ctx, r.client, "set_group_roles", map[string]any{
 		"groupName":      group,
 		"roleNames":      roles,
 		"idempotencyKey": idempotencyKey("group.roles", group, strings.Join(sortedCopy(roles), ",")),
 	})
 	if err != nil {
-		return err
+		return 0, err
 	}
 	r.client.Listings().Invalidate()
-	return nil
+	return found.ID, nil
+}
+
+func groupForBinding(groups []pmonmcp.Group, state groupRolesResourceModel) (pmonmcp.Group, bool) {
+	for _, group := range groups {
+		if !state.GroupID.IsNull() && !state.GroupID.IsUnknown() {
+			if group.ID == state.GroupID.ValueInt64() {
+				return group, true
+			}
+		} else if group.Name == state.GroupName.ValueString() {
+			return group, true
+		}
+	}
+	return pmonmcp.Group{}, false
 }
 
 // sortedCopy sorts without disturbing the caller's slice, which Terraform still holds.

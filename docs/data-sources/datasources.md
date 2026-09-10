@@ -35,21 +35,21 @@ output "untagged_production" {
 
 ### Read-Only
 
-- `datasources` (Attributes List) The brokered datasources, as pmon reports them. (see [below for nested schema](#nestedatt--datasources))
+- `datasources` (List of Object) The brokered datasources, as pmon reports them. Each object contains `id` (internal id), `name` (the Cedar identity), `engine` (`mysql` or `postgres`), `host`, `port`, `db_name`, `tags` (strings pushed by the proxy), `default_schemas` (strings used to resolve unqualified tables), `engine_version`, `catalog_synced_at`, and `last_seen_at`. The final three fields are nullable; a null `catalog_synced_at` means the proxy has never pushed a catalog. Host, port, and database name are descriptive only. The shipped policies use `system:production` and `system:development` tags; an untagged datasource falls back to the production floor. (see [below for nested schema](#nestedatt--datasources))
 
 <a id="nestedatt--datasources"></a>
 ### Nested Schema for `datasources`
 
 Read-Only:
 
-- `catalog_synced_at` (String) When the proxy last pushed a catalog. Null means it never has, which leaves the datasource with no columns to classify.
-- `db_name` (String) Target database name. Descriptive only.
-- `default_schemas` (List of String) Schemas resolved when a query does not qualify a table.
-- `engine` (String) Database engine, `mysql` or `postgres`.
-- `engine_version` (String) Engine version the proxy last reported.
-- `host` (String) Target host. Descriptive only; nothing in enforcement reads it.
-- `id` (Number) pmon's internal id. Cedar keys on the name, not this.
-- `last_seen_at` (String) When a proxy last checked in for this datasource.
-- `name` (String) Logical name. This is what Cedar policies match on.
-- `port` (Number) Target port. Descriptive only.
-- `tags` (List of String) Tags the proxy pushed at registration. The posture tags `system:production` and `system:development` are what the shipped preset policies key on; an untagged datasource falls back to the production floor.
+- `catalog_synced_at` (String)
+- `db_name` (String)
+- `default_schemas` (List of String)
+- `engine` (String)
+- `engine_version` (String)
+- `host` (String)
+- `id` (Number)
+- `last_seen_at` (String)
+- `name` (String)
+- `port` (Number)
+- `tags` (List of String)
