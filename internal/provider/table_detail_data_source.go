@@ -203,8 +203,15 @@ func (d *tableDetailDataSource) Read(ctx context.Context, req datasource.ReadReq
 		return
 	}
 
+	catalog, err := datasourceCatalog(ctx, d.client, state.Datasource.ValueString())
+	if err != nil {
+		resp.Diagnostics.AddError("Cannot resolve the catalog of "+state.Datasource.ValueString(), err.Error())
+		return
+	}
+
 	detail, err := pmonmcp.Call[pmonmcp.TableDetail](ctx, d.client, "get_table_detail", map[string]any{
 		"datasource": state.Datasource.ValueString(),
+		"catalog":    catalog,
 		"schema":     state.Schema.ValueString(),
 		"table":      state.Table.ValueString(),
 	})

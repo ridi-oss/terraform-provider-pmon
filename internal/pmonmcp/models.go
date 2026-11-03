@@ -20,6 +20,7 @@ type Datasource struct {
 	EngineVersion   *string  `json:"engineVersion"`
 	CatalogSyncedAt *string  `json:"catalogSyncedAt"`
 	LastSeenAt      *string  `json:"lastSeenAt"`
+	CurrentCatalog  *string  `json:"currentCatalog"`
 }
 
 // Policy is a Cedar policy. Origin is SYSTEM for shipped policies, which are immutable, and USER

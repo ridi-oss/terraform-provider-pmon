@@ -11,7 +11,7 @@ func TestDecodeDatasource(t *testing.T) {
 	raw := `{"id":1,"name":"example-finance-rw","engine":"mysql","host":"h","port":3306,
 		"dbName":"exampledb","tags":["system:production"],"defaultSchemas":["exampledb"],
 		"catalogSyncedAt":"2026-08-10T03:58:35Z","lastSeenAt":"2026-08-10T03:58:35Z",
-		"engineVersion":"8.0.44"}`
+		"engineVersion":"8.0.44","currentCatalog":"def"}`
 
 	var ds Datasource
 	if err := json.Unmarshal([]byte(raw), &ds); err != nil {
@@ -22,6 +22,9 @@ func TestDecodeDatasource(t *testing.T) {
 	}
 	if len(ds.Tags) != 1 || ds.Tags[0] != "system:production" {
 		t.Errorf("tags = %v", ds.Tags)
+	}
+	if ds.CurrentCatalog == nil || *ds.CurrentCatalog != "def" {
+		t.Errorf("currentCatalog = %v, want def", ds.CurrentCatalog)
 	}
 }
 
@@ -34,6 +37,9 @@ func TestDecodeDatasourceWithoutCatalog(t *testing.T) {
 	}
 	if ds.CatalogSyncedAt != nil {
 		t.Errorf("catalogSyncedAt = %v, want nil for a datasource that never synced", *ds.CatalogSyncedAt)
+	}
+	if ds.CurrentCatalog != nil {
+		t.Errorf("currentCatalog = %v, want nil for a datasource that never pushed a catalog", *ds.CurrentCatalog)
 	}
 }
 

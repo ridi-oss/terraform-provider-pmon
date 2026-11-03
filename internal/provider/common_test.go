@@ -1,6 +1,10 @@
 package provider
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/ridi-oss/terraform-provider-pmon/internal/pmonmcp"
+)
 
 // The key must depend only on the intended end state: pmon replays a recorded outcome for a
 // repeated key, which is what makes a retry safe, and a key that varied per attempt would defeat
@@ -73,3 +77,28 @@ func TestIsNotFound(t *testing.T) {
 type errString string
 
 func (e errString) Error() string { return string(e) }
+
+func TestCatalogOfReturnsTheCurrentCatalog(t *testing.T) {
+	current := "def"
+	catalog, err := catalogOf("example-rw", pmonmcp.Datasource{CurrentCatalog: &current}, true)
+	if err != nil || catalog != "def" {
+		t.Errorf("catalogOf = %q, %v; want def", catalog, err)
+	}
+}
+
+func TestCatalogOfMissingDatasourceReadsAsNotFound(t *testing.T) {
+	_, err := catalogOf("gone", pmonmcp.Datasource{}, false)
+	if !isNotFound(err) {
+		t.Errorf("error %v must read as not found so clearing a removed datasource is a no-op", err)
+	}
+}
+
+func TestCatalogOfRefusesAnUnpushedCatalog(t *testing.T) {
+	blank := " "
+	for name, current := range map[string]*string{"absent": nil, "blank": &blank} {
+		_, err := catalogOf("fresh", pmonmcp.Datasource{CurrentCatalog: current}, true)
+		if err == nil || isNotFound(err) {
+			t.Errorf("%s catalog: err = %v, want a hard error that is not a not-found", name, err)
+		}
+	}
+}

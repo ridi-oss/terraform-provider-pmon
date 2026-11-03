@@ -6,6 +6,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
@@ -244,14 +245,15 @@ func (r *columnClassificationResource) Update(ctx context.Context, req resource.
 	for _, column := range plan.Columns {
 		wanted[column.key()] = struct{}{}
 	}
+	dropped := make([]classifiedColumnModel, 0, len(state.Columns))
 	for _, column := range state.Columns {
-		if _, keep := wanted[column.key()]; keep {
-			continue
+		if _, keep := wanted[column.key()]; !keep {
+			dropped = append(dropped, column)
 		}
-		if err := r.clear(ctx, plan.Datasource.ValueString(), column); err != nil && !isNotFound(err) {
-			resp.Diagnostics.AddError("Cannot clear the classification of "+column.key(), err.Error())
-			return
-		}
+	}
+	resp.Diagnostics.Append(r.clearAll(ctx, plan.Datasource.ValueString(), dropped)...)
+	if resp.Diagnostics.HasError() {
+		return
 	}
 
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
@@ -264,12 +266,29 @@ func (r *columnClassificationResource) Delete(ctx context.Context, req resource.
 		return
 	}
 
-	for _, column := range state.Columns {
-		if err := r.clear(ctx, state.Datasource.ValueString(), column); err != nil && !isNotFound(err) {
-			resp.Diagnostics.AddError("Cannot clear the classification of "+column.key(), err.Error())
-			return
+	resp.Diagnostics.Append(r.clearAll(ctx, state.Datasource.ValueString(), state.Columns)...)
+}
+
+func (r *columnClassificationResource) clearAll(ctx context.Context, datasource string, columns []classifiedColumnModel) diag.Diagnostics {
+	var diags diag.Diagnostics
+	if len(columns) == 0 {
+		return diags
+	}
+	catalog, err := datasourceCatalog(ctx, r.client, datasource)
+	if isNotFound(err) {
+		return diags
+	}
+	if err != nil {
+		diags.AddError("Cannot resolve the catalog of "+datasource, err.Error())
+		return diags
+	}
+	for _, column := range columns {
+		if err := r.clear(ctx, datasource, catalog, column); err != nil && !isNotFound(err) {
+			diags.AddError("Cannot clear the classification of "+column.key(), err.Error())
+			return diags
 		}
 	}
+	return diags
 }
 
 // ImportState takes the datasource name and adopts every column pmon reports as classified on it.
@@ -313,13 +332,19 @@ func (r *columnClassificationResource) apply(ctx context.Context, plan columnCla
 		return nil
 	}
 
+	catalog, err := datasourceCatalog(ctx, r.client, plan.Datasource.ValueString())
+	if err != nil {
+		return err
+	}
+
 	entries := make([]map[string]any, 0, len(plan.Columns))
 	fingerprint := make([]string, 0, len(plan.Columns))
 	for _, column := range plan.Columns {
 		entry := map[string]any{
-			"table":  column.Table.ValueString(),
-			"column": column.Column.ValueString(),
-			"tags":   column.Tags,
+			"catalog": catalog,
+			"table":   column.Table.ValueString(),
+			"column":  column.Column.ValueString(),
+			"tags":    column.Tags,
 		}
 		if !column.Schema.IsNull() {
 			entry["schema"] = column.Schema.ValueString()
@@ -335,16 +360,17 @@ func (r *columnClassificationResource) apply(ctx context.Context, plan columnCla
 	return pmonmcp.Do(ctx, r.client, "set_column_classifications", map[string]any{
 		"datasource":     plan.Datasource.ValueString(),
 		"columns":        entries,
-		"idempotencyKey": idempotencyKey(append([]string{"classification", plan.Datasource.ValueString()}, fingerprint...)...),
+		"idempotencyKey": idempotencyKey(append([]string{"classification", plan.Datasource.ValueString(), catalog}, fingerprint...)...),
 	})
 }
 
-func (r *columnClassificationResource) clear(ctx context.Context, datasource string, column classifiedColumnModel) error {
+func (r *columnClassificationResource) clear(ctx context.Context, datasource, catalog string, column classifiedColumnModel) error {
 	args := map[string]any{
 		"datasource":     datasource,
+		"catalog":        catalog,
 		"table":          column.Table.ValueString(),
 		"column":         column.Column.ValueString(),
-		"idempotencyKey": idempotencyKey("classification.clear", datasource, column.key()),
+		"idempotencyKey": idempotencyKey("classification.clear", datasource, catalog, column.key()),
 	}
 	if !column.Schema.IsNull() {
 		args["schema"] = column.Schema.ValueString()
