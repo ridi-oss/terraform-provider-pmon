@@ -108,7 +108,7 @@ func (r *workloadBindingResource) Schema(ctx context.Context, req resource.Schem
 				MarkdownDescription: "Service principal the token acts as, `svc:<name>`. Defaults to `svc:` followed by the binding name.",
 				Optional:            true,
 				Computed:            true,
-				PlanModifiers:       []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
+				PlanModifiers:       []planmodifier.String{principalFromName{}},
 			},
 			"purposes": schema.SetAttribute{
 				ElementType:         types.StringType,
@@ -383,4 +383,27 @@ func applyWorkloadBinding(ctx context.Context, model *workloadBindingModel, b pm
 		model.Conditions = conditions
 	}
 	return diags
+}
+
+type principalFromName struct{}
+
+func (principalFromName) Description(context.Context) string {
+	return "Defaults to svc: followed by the planned binding name."
+}
+
+func (m principalFromName) MarkdownDescription(ctx context.Context) string {
+	return m.Description(ctx)
+}
+
+func (principalFromName) PlanModifyString(ctx context.Context, req planmodifier.StringRequest, resp *planmodifier.StringResponse) {
+	if !req.ConfigValue.IsNull() {
+		return
+	}
+	var name types.String
+	resp.Diagnostics.Append(req.Plan.GetAttribute(ctx, path.Root("name"), &name)...)
+	if known(name) {
+		resp.PlanValue = types.StringValue("svc:" + name.ValueString())
+	} else {
+		resp.PlanValue = types.StringUnknown()
+	}
 }

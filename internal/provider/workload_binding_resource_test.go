@@ -9,6 +9,9 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-framework/types/basetypes"
 	"github.com/ridi-oss/terraform-provider-pmon/internal/pmonmcp"
@@ -119,5 +122,38 @@ func TestApplyWorkloadBindingKeepsAnUnsetConditionsNull(t *testing.T) {
 		Principal: "svc:tf-pmon-apply", Purposes: []string{"mcp"}, MCPScopes: []string{"mcp:read"}, TTLSeconds: 600, Enabled: true})
 	if diags.HasError() || !m.Conditions.IsNull() || m.Principal.ValueString() != "svc:tf-pmon-apply" || m.ID.ValueInt64() != 7 || m.TTLSeconds.ValueInt64() != 600 {
 		t.Errorf("model %+v %v", m, diags)
+	}
+}
+
+func TestDefaultPrincipalFollowsThePlannedName(t *testing.T) {
+	ctx := context.Background()
+	var sresp resource.SchemaResponse
+	NewWorkloadBindingResource().Schema(ctx, resource.SchemaRequest{}, &sresp)
+	if principal, ok := sresp.Schema.Attributes["principal"].(schema.StringAttribute); !ok || len(principal.PlanModifiers) != 1 || principal.PlanModifiers[0] != (principalFromName{}) {
+		t.Fatalf("principal attribute %#v", sresp.Schema.Attributes["principal"])
+	}
+	plan := func(name types.String) tfsdk.Plan {
+		p := tfsdk.Plan{Schema: sresp.Schema}
+		if diags := p.Set(ctx, bindingModel(func(m *workloadBindingModel) { m.Name = name })); diags.HasError() {
+			t.Fatal(diags)
+		}
+		return p
+	}
+	for _, tc := range []struct {
+		name   types.String
+		config types.String
+		want   types.String
+	}{
+		{types.StringValue("renamed"), types.StringNull(), types.StringValue("svc:renamed")},
+		{types.StringUnknown(), types.StringNull(), types.StringUnknown()},
+		{types.StringValue("renamed"), types.StringValue("svc:kept"), types.StringValue("svc:old")},
+	} {
+		req := planmodifier.StringRequest{Plan: plan(tc.name), ConfigValue: tc.config, StateValue: types.StringValue("svc:old"),
+			PlanValue: types.StringValue("svc:old")}
+		resp := &planmodifier.StringResponse{PlanValue: req.PlanValue}
+		principalFromName{}.PlanModifyString(ctx, req, resp)
+		if resp.Diagnostics.HasError() || !resp.PlanValue.Equal(tc.want) {
+			t.Errorf("name %s config %s: planned %s %v, want %s", tc.name, tc.config, resp.PlanValue, resp.Diagnostics, tc.want)
+		}
 	}
 }
