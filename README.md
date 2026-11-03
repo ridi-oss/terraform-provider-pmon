@@ -1,7 +1,8 @@
 # Terraform Provider for proxy-monster
 
 Manages [proxy-monster](https://github.com/ridi-oss/proxy-monster) access control as code:
-Cedar policies, roles, groups and their memberships, masking functions, and column classification.
+Cedar policies, roles, groups and their memberships, masking functions, column classification,
+and workload bindings.
 
 The provider talks to pmon's MCP administration endpoint rather than its REST API. MCP is a
 first-class management surface in pmon -- it reuses the same services, transactions, and
@@ -22,6 +23,7 @@ retry after a dropped connection cannot apply twice.
 | `pmon_role_assignment` | A role granted straight to a principal, bypassing groups. |
 | `pmon_mask_fn` | A masking function. |
 | `pmon_column_classification` | Tags on one datasource's columns. |
+| `pmon_workload_binding` | Which workload OIDC tokens act as which service principal. |
 
 ## Data sources
 
@@ -35,6 +37,7 @@ retry after a dropped connection cannot apply twice.
 | `pmon_policies` / `pmon_policy` | Every Cedar policy, or one by name. |
 | `pmon_policy_schema` | The Cedar schema policies are validated against. |
 | `pmon_roles` / `pmon_groups` / `pmon_users` | The identity estate. |
+| `pmon_workload_bindings` | Every workload binding. |
 
 `pmon_catalog` is what lets a classification be derived rather than typed out:
 
@@ -134,8 +137,64 @@ That is how a read-only configuration stays read-only.
 Because the token names a person, every change lands in pmon's audit trail attributed to the human
 who ran it, with `channel=mcp`.
 
-That also makes the provider unsuitable for unattended CI today: refresh tokens are short-lived
-and rotate on every use, so two concurrent runs would invalidate each other.
+A personal token is still the wrong credential for unattended CI: refresh tokens are short-lived
+and rotate on every use, so two concurrent runs would invalidate each other. Unattended runs
+authenticate as a workload instead.
+
+### Running in HCP Terraform
+
+An HCP Terraform run authenticates as a service principal, with no person and no stored secret.
+HCP Terraform signs a short-lived OIDC token for each plan and apply, the provider exchanges it at
+pmon's `/api/workload/exchange` for an MCP access token, and pmon maps it to a principal through a
+workload binding.
+
+1. On pmon, trust HCP Terraform as an issuer: `PM_CI_OIDC_ISSUERS` gets an entry such as
+   `hcp-terraform=https://app.terraform.io` (pmon recognizes the host; for a Terraform Enterprise
+   host, also set `PM_WORKLOAD_ISSUER_KINDS=hcp-terraform=hcp-terraform`).
+2. In the workspace, set the variable `TFC_WORKLOAD_IDENTITY_AUDIENCE_PMON` to pmon's audience,
+   which is `PM_CI_OIDC_AUDIENCE` or, by default, pmon's public origin
+   (`https://pmon.example.com`). HCP Terraform then injects `TFC_WORKLOAD_IDENTITY_TOKEN_PMON` into
+   each run, and the provider picks it up. The untagged `TFC_WORKLOAD_IDENTITY_AUDIENCE` and
+   `TFC_WORKLOAD_IDENTITY_TOKEN` work too; `PMON_WORKLOAD_IDENTITY_TAG` picks another tag.
+3. Bind each run phase. The token's `sub` is
+   `organization:<org>:project:<project>:workspace:<workspace>:run_phase:<plan|apply>`, so a plan
+   binding can carry read scopes only while the apply binding carries the write scopes, both
+   acting as the same principal:
+
+```terraform
+resource "pmon_workload_binding" "pmon_plan" {
+  name       = "tf-pmon-plan"
+  issuer     = "hcp-terraform"
+  subject    = "organization:acme:project:infra:workspace:pmon:run_phase:plan"
+  principal  = "svc:tf-pmon"
+  purposes   = ["mcp"]
+  mcp_scopes = ["mcp:read"]
+}
+
+resource "pmon_workload_binding" "pmon_apply" {
+  name       = "tf-pmon-apply"
+  issuer     = "hcp-terraform"
+  subject    = "organization:acme:project:infra:workspace:pmon:run_phase:apply"
+  principal  = "svc:tf-pmon"
+  purposes   = ["mcp"]
+  mcp_scopes = ["mcp:read", "mcp:policies:write", "mcp:identity:write"]
+}
+
+resource "pmon_role_assignment" "tf_pmon" {
+  principal = "svc:tf-pmon"
+  role_name = "pmon-admin"
+}
+```
+
+Create the bindings once from a workstation (the provider logs you in with a browser there), then
+let the workspace manage itself. The scopes are still only a ceiling: pmon resolves the
+principal's roles and evaluates Cedar on every call, and the audit trail names `svc:tf-pmon`.
+
+Each token exchanges once, and the access token lasts the shorter of the binding's `ttl_seconds`
+and pmon's MCP access token lifetime, with no refresh. Provider processes in one run share the
+exchanged token through a file in the run's temporary directory, keyed by the token. Any other CI
+works the same way with `PMON_WORKLOAD_IDENTITY_TOKEN` set to a token its platform issued, such as
+a GitHub Actions OIDC token bound by its `repo:<owner>/<repo>:environment:<env>` subject.
 
 ## What this provider does not manage
 
