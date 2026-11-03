@@ -60,6 +60,10 @@ func run(ctx context.Context) error {
 		fmt.Println("using the access token from the environment; nothing was cached")
 		return nil
 	}
+	if cfg.WorkloadToken != "" {
+		fmt.Printf("exchanged the workload identity token from %s; nothing was cached\n", cfg.WorkloadOrigin)
+		return nil
+	}
 	fmt.Printf("token cached at %s\n", cfg.TokenCachePath)
 	return nil
 }

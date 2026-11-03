@@ -45,6 +45,10 @@ const (
 	envNoBrowser         = "PMON_NO_BROWSER"
 	envScopes            = "PMON_SCOPES"
 	envAccessToken       = "PMON_ACCESS_TOKEN"
+	envWorkloadToken     = "PMON_WORKLOAD_IDENTITY_TOKEN"
+	envWorkloadTag       = "PMON_WORKLOAD_IDENTITY_TAG"
+	envTFCTokenPrefix    = "TFC_WORKLOAD_IDENTITY_TOKEN"
+	defaultWorkloadTag   = "PMON"
 )
 
 var _ provider.Provider = &PmonProvider{}
@@ -64,6 +68,7 @@ type PmonProviderModel struct {
 	TokenCachePath    types.String `tfsdk:"token_cache_path"`
 	Scopes            types.Set    `tfsdk:"scopes"`
 	AccessToken       types.String `tfsdk:"access_token"`
+	WorkloadToken     types.String `tfsdk:"workload_identity_token"`
 }
 
 // Config is the provider configuration after environment fallbacks and defaults are applied.
@@ -74,6 +79,8 @@ type Config struct {
 	NoBrowser         bool
 	Scopes            []string
 	AccessToken       string
+	WorkloadToken     string
+	WorkloadOrigin    string
 }
 
 func (p *PmonProvider) Metadata(ctx context.Context, req provider.MetadataRequest, resp *provider.MetadataResponse) {
@@ -128,6 +135,21 @@ func (p *PmonProvider) Schema(ctx context.Context, req provider.SchemaRequest, r
 				Optional:  true,
 				Sensitive: true,
 			},
+			"workload_identity_token": schema.StringAttribute{
+				MarkdownDescription: "An OIDC token the platform running Terraform issued for this run, exchanged " +
+					"at pmon for a short-lived access token instead of logging in. May also be set with the `" +
+					envWorkloadToken + "` environment variable. Without either, the provider reads HCP " +
+					"Terraform's `" + envTFCTokenPrefix + "_PMON` (from a `TFC_WORKLOAD_IDENTITY_AUDIENCE_PMON` " +
+					"workspace variable; set `" + envWorkloadTag + "` to use another tag), then `" +
+					envTFCTokenPrefix + "`.\n\n" +
+					"pmon maps the token to a service principal through a workload binding (`pmon_workload_binding`), " +
+					"and the binding's `mcp_scopes` cap what the access token carries. `scopes` narrows the " +
+					"request further. No browser opens and nothing is written to the token cache. Each token " +
+					"exchanges once and the access token is not renewed, so a run that outlives it fails and the " +
+					"next run starts with a fresh token. `access_token` takes precedence when set.",
+				Optional:  true,
+				Sensitive: true,
+			},
 		},
 	}
 }
@@ -165,6 +187,13 @@ func (p *PmonProvider) Configure(ctx context.Context, req provider.ConfigureRequ
 		if errors.Is(err, pmonauth.ErrBrowserDisabled) {
 			detail += "\n\nUnset " + envNoBrowser + " to log in with a browser, or set access_token to a " +
 				"token obtained elsewhere."
+		}
+		if errors.Is(err, pmonauth.ErrWorkloadExchange) && cfg.WorkloadOrigin != "" {
+			detail += "\n\nThe workload identity token came from " + cfg.WorkloadOrigin + "."
+		}
+		if errors.Is(err, pmonauth.ErrWorkloadAccessExpired) {
+			detail += "\n\nThe access token pmon minted for this run has expired and cannot be renewed from " +
+				"here. Raise the workload binding's ttl_seconds, or split the run."
 		}
 		if errors.Is(err, pmonauth.ErrStaticTokenRejected) {
 			detail += "\n\npmon access tokens last ten minutes and this one cannot be renewed from here. " +
@@ -218,6 +247,15 @@ func newAuthHandler(cfg *Config) (auth.OAuthHandler, error) {
 	if cfg.AccessToken != "" {
 		return pmonauth.NewStaticHandler(cfg.AccessToken)
 	}
+	if cfg.WorkloadToken != "" {
+		return pmonauth.NewWorkloadHandler(pmonauth.WorkloadOptions{
+			Endpoint: cfg.Endpoint,
+			Token:    cfg.WorkloadToken,
+			Origin:   cfg.WorkloadOrigin,
+			Scopes:   cfg.Scopes,
+			CacheDir: os.TempDir(),
+		})
+	}
 	return pmonauth.NewHandler(pmonauth.Options{
 		Endpoint:          cfg.Endpoint,
 		ClientMetadataURL: cfg.ClientMetadataURL,
@@ -242,10 +280,11 @@ func resolveConfig(ctx context.Context, data PmonProviderModel) (*Config, diag.D
 	// An unknown here means the value comes from another resource's output, which is not available
 	// while the provider is being configured. Saying so beats failing later with an empty endpoint.
 	for name, attr := range map[string]types.String{
-		"endpoint":            data.Endpoint,
-		"client_metadata_url": data.ClientMetadataURL,
-		"token_cache_path":    data.TokenCachePath,
-		"access_token":        data.AccessToken,
+		"endpoint":                data.Endpoint,
+		"client_metadata_url":     data.ClientMetadataURL,
+		"token_cache_path":        data.TokenCachePath,
+		"access_token":            data.AccessToken,
+		"workload_identity_token": data.WorkloadToken,
 	} {
 		if attr.IsUnknown() {
 			diags.AddAttributeError(
@@ -281,6 +320,24 @@ func resolveConfig(ctx context.Context, data PmonProviderModel) (*Config, diag.D
 		NoBrowser:         os.Getenv(envNoBrowser) != "",
 		Scopes:            scopes,
 		AccessToken:       firstNonEmpty(data.AccessToken.ValueString(), os.Getenv(envAccessToken)),
+	}
+	explicitWorkload := resolveWorkloadToken(cfg, data.WorkloadToken.ValueString())
+
+	if cfg.AccessToken != "" && explicitWorkload {
+		diags.AddAttributeError(
+			path.Root("workload_identity_token"),
+			"Conflicting pmon credentials",
+			"Both access_token and workload_identity_token are set. Set one: access_token presents a token "+
+				"obtained elsewhere, workload_identity_token exchanges a platform-issued OIDC token.",
+		)
+	}
+	if strings.ContainsFunc(cfg.WorkloadToken, unicode.IsSpace) {
+		diags.AddAttributeError(
+			path.Root("workload_identity_token"),
+			"Malformed workload identity token",
+			"The workload identity token from "+cfg.WorkloadOrigin+" contains whitespace. Check that it was "+
+				"passed whole and without a line break in the middle.",
+		)
 	}
 
 	// A token pasted out of a terminal usually arrives with a newline attached. firstNonEmpty has
@@ -387,6 +444,22 @@ func resolveScopes(ctx context.Context, configured types.Set) ([]string, diag.Di
 	return scopes, diags
 }
 
+func resolveWorkloadToken(cfg *Config, configured string) bool {
+	tag := firstNonEmpty(os.Getenv(envWorkloadTag), defaultWorkloadTag)
+	for _, source := range []struct{ origin, value string }{
+		{"the workload_identity_token attribute", configured},
+		{envWorkloadToken, os.Getenv(envWorkloadToken)},
+		{envTFCTokenPrefix + "_" + tag, os.Getenv(envTFCTokenPrefix + "_" + tag)},
+		{envTFCTokenPrefix, os.Getenv(envTFCTokenPrefix)},
+	} {
+		if v := strings.TrimSpace(source.value); v != "" {
+			cfg.WorkloadToken, cfg.WorkloadOrigin = v, source.origin
+			return !strings.HasPrefix(source.origin, envTFCTokenPrefix)
+		}
+	}
+	return false
+}
+
 // ConfigFromEnv resolves provider configuration with nothing set in HCL, so every value comes
 // from an environment variable or a default. It exists so a command-line helper cannot drift
 // from what the provider itself would do with the same environment.
@@ -397,6 +470,7 @@ func ConfigFromEnv(ctx context.Context) (*Config, diag.Diagnostics) {
 		TokenCachePath:    types.StringNull(),
 		Scopes:            types.SetNull(types.StringType),
 		AccessToken:       types.StringNull(),
+		WorkloadToken:     types.StringNull(),
 	})
 }
 
