@@ -14,12 +14,17 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/ridi-oss/terraform-provider-pmon/internal/pmonauth"
 	"github.com/ridi-oss/terraform-provider-pmon/internal/pmonmcp"
 	"github.com/ridi-oss/terraform-provider-pmon/internal/provider"
 )
 
 func main() {
-	if err := run(context.Background()); err != nil {
+	err := run(context.Background())
+	if cerr := pmonauth.CloseWorkloadHandlers(context.Background()); cerr != nil {
+		err = errors.Join(err, cerr)
+	}
+	if err != nil {
 		fmt.Fprintln(os.Stderr, "pmon-login:", err)
 		os.Exit(1)
 	}
@@ -58,6 +63,10 @@ func run(ctx context.Context) error {
 	fmt.Printf("logged in to %s\n", cfg.Endpoint)
 	if cfg.AccessToken != "" {
 		fmt.Println("using the access token from the environment; nothing was cached")
+		return nil
+	}
+	if cfg.WorkloadToken != "" {
+		fmt.Printf("exchanged the workload identity token from %s; the access token it minted is revoked before exit\n", cfg.WorkloadOrigin)
 		return nil
 	}
 	fmt.Printf("token cached at %s\n", cfg.TokenCachePath)

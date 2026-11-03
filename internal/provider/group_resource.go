@@ -107,7 +107,7 @@ func (r *groupResource) Create(ctx context.Context, req resource.CreateRequest, 
 	name := plan.Name.ValueString()
 	args := map[string]any{
 		"name":           name,
-		"idempotencyKey": idempotencyKey("group.create", name),
+		"idempotencyKey": newIdempotencyKey(),
 	}
 	if !plan.Description.IsNull() {
 		args["description"] = plan.Description.ValueString()
@@ -160,7 +160,7 @@ func (r *groupResource) Update(ctx context.Context, req resource.UpdateRequest, 
 
 	args := map[string]any{
 		"name":           current,
-		"idempotencyKey": idempotencyKey("group.update", current, wanted, plan.Description.ValueString()),
+		"idempotencyKey": newIdempotencyKey(),
 	}
 	if wanted != current {
 		args["newName"] = wanted
@@ -192,7 +192,7 @@ func (r *groupResource) Delete(ctx context.Context, req resource.DeleteRequest, 
 	name := state.Name.ValueString()
 	err := pmonmcp.Do(ctx, r.client, "delete_group", map[string]any{
 		"name":           name,
-		"idempotencyKey": idempotencyKey("group.delete", name),
+		"idempotencyKey": newIdempotencyKey(),
 	})
 	if err != nil && !isNotFound(err) {
 		resp.Diagnostics.AddError("Cannot delete the pmon group "+name, updateErrorDetail(err))

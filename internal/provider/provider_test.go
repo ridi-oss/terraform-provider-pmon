@@ -18,6 +18,14 @@ func nullModel() PmonProviderModel {
 		TokenCachePath:    types.StringNull(),
 		Scopes:            types.SetNull(types.StringType),
 		AccessToken:       types.StringNull(),
+		WorkloadToken:     types.StringNull(),
+	}
+}
+
+func clearWorkloadEnv(t *testing.T) {
+	t.Helper()
+	for _, name := range []string{envAccessToken, envWorkloadToken, envWorkloadTag, envTFCTokenPrefix + "_PMON", envTFCTokenPrefix + "_OTHER", envTFCTokenPrefix} {
+		t.Setenv(name, "")
 	}
 }
 
@@ -255,5 +263,77 @@ func TestNewAuthHandlerLogsInWithoutTheToken(t *testing.T) {
 	}
 	if _, ok := handler.(*pmonauth.Handler); !ok {
 		t.Errorf("handler = %T, want *pmonauth.Handler", handler)
+	}
+}
+
+func TestResolveWorkloadTokenPrecedence(t *testing.T) {
+	for _, tc := range []struct {
+		name, attr, origin, want string
+		env                      map[string]string
+	}{
+		{"attribute first", "jwt-attr", "the workload_identity_token attribute", "jwt-attr",
+			map[string]string{envWorkloadToken: "jwt-env", envTFCTokenPrefix + "_PMON": "jwt-tagged"}},
+		{"env next", "", envWorkloadToken, "jwt-env",
+			map[string]string{envWorkloadToken: "jwt-env", envTFCTokenPrefix + "_PMON": "jwt-tagged", envTFCTokenPrefix: "jwt-plain"}},
+		{"tagged HCP Terraform token", "", envTFCTokenPrefix + "_PMON", "jwt-tagged",
+			map[string]string{envTFCTokenPrefix + "_PMON": "jwt-tagged", envTFCTokenPrefix: "jwt-plain"}},
+		{"another tag", "", envTFCTokenPrefix + "_OTHER", "jwt-other",
+			map[string]string{envWorkloadTag: "OTHER", envTFCTokenPrefix + "_OTHER": "jwt-other", envTFCTokenPrefix + "_PMON": "jwt-tagged"}},
+		{"untagged HCP Terraform token", "", envTFCTokenPrefix, "jwt-plain", map[string]string{envTFCTokenPrefix: "jwt-plain"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			clearWorkloadEnv(t)
+			t.Setenv(envEndpoint, "https://pmon.example.com/mcp")
+			for k, v := range tc.env {
+				t.Setenv(k, v)
+			}
+			model := nullModel()
+			if tc.attr != "" {
+				model.WorkloadToken = types.StringValue(tc.attr)
+			}
+			cfg, diags := resolveConfig(context.Background(), model)
+			if diags.HasError() || cfg.WorkloadToken != tc.want || cfg.WorkloadOrigin != tc.origin {
+				t.Errorf("got %q from %q, %v", cfg.WorkloadToken, cfg.WorkloadOrigin, diags)
+			}
+		})
+	}
+}
+
+func TestResolveConfigRefusesTwoExplicitCredentials(t *testing.T) {
+	clearWorkloadEnv(t)
+	t.Setenv(envEndpoint, "https://pmon.example.com/mcp")
+	t.Setenv(envAccessToken, "pma_pasted")
+	t.Setenv(envWorkloadToken, "jwt-env")
+	if _, diags := resolveConfig(context.Background(), nullModel()); !diags.HasError() {
+		t.Fatal("expected a conflict diagnostic")
+	}
+}
+
+func TestAccessTokenWinsOverAnInjectedHCPTerraformToken(t *testing.T) {
+	clearWorkloadEnv(t)
+	t.Setenv(envEndpoint, "https://pmon.example.com/mcp")
+	t.Setenv(envAccessToken, "pma_pasted")
+	t.Setenv(envTFCTokenPrefix, "jwt-plain")
+	cfg, diags := resolveConfig(context.Background(), nullModel())
+	if diags.HasError() {
+		t.Fatalf("unexpected diagnostics: %v", diags)
+	}
+	handler, err := newAuthHandler(cfg)
+	if _, ok := handler.(*pmonauth.StaticHandler); err != nil || !ok {
+		t.Errorf("handler %T %v", handler, err)
+	}
+}
+
+func TestNewAuthHandlerExchangesAWorkloadToken(t *testing.T) {
+	clearWorkloadEnv(t)
+	t.Setenv(envEndpoint, "https://pmon.example.com/mcp")
+	t.Setenv(envWorkloadToken, "header.payload.signature")
+	cfg, diags := resolveConfig(context.Background(), nullModel())
+	if diags.HasError() {
+		t.Fatalf("unexpected diagnostics: %v", diags)
+	}
+	handler, err := newAuthHandler(cfg)
+	if _, ok := handler.(*pmonauth.WorkloadHandler); err != nil || !ok {
+		t.Errorf("handler %T %v", handler, err)
 	}
 }

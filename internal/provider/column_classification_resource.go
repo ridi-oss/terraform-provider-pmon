@@ -314,7 +314,6 @@ func (r *columnClassificationResource) apply(ctx context.Context, plan columnCla
 	}
 
 	entries := make([]map[string]any, 0, len(plan.Columns))
-	fingerprint := make([]string, 0, len(plan.Columns))
 	for _, column := range plan.Columns {
 		entry := map[string]any{
 			"table":  column.Table.ValueString(),
@@ -328,14 +327,12 @@ func (r *columnClassificationResource) apply(ctx context.Context, plan columnCla
 			entry["maskFnName"] = column.MaskFnName.ValueString()
 		}
 		entries = append(entries, entry)
-		fingerprint = append(fingerprint, column.key()+"="+strings.Join(sortedCopy(column.Tags), "+")+"/"+column.MaskFnName.ValueString())
 	}
-	sort.Strings(fingerprint)
 
 	return pmonmcp.Do(ctx, r.client, "set_column_classifications", map[string]any{
 		"datasource":     plan.Datasource.ValueString(),
 		"columns":        entries,
-		"idempotencyKey": idempotencyKey(append([]string{"classification", plan.Datasource.ValueString()}, fingerprint...)...),
+		"idempotencyKey": newIdempotencyKey(),
 	})
 }
 
@@ -344,7 +341,7 @@ func (r *columnClassificationResource) clear(ctx context.Context, datasource str
 		"datasource":     datasource,
 		"table":          column.Table.ValueString(),
 		"column":         column.Column.ValueString(),
-		"idempotencyKey": idempotencyKey("classification.clear", datasource, column.key()),
+		"idempotencyKey": newIdempotencyKey(),
 	}
 	if !column.Schema.IsNull() {
 		args["schema"] = column.Schema.ValueString()

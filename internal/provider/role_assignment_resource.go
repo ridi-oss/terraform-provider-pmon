@@ -99,7 +99,7 @@ func (r *roleAssignmentResource) Create(ctx context.Context, req resource.Create
 	err := pmonmcp.Do(ctx, r.client, "assign_role", map[string]any{
 		"principal":      principal,
 		"roleName":       role,
-		"idempotencyKey": idempotencyKey("role.assign", principal, role),
+		"idempotencyKey": newIdempotencyKey(),
 	})
 	if err != nil {
 		resp.Diagnostics.AddError("Cannot assign "+role+" to "+principal, err.Error())
@@ -155,7 +155,7 @@ func (r *roleAssignmentResource) Delete(ctx context.Context, req resource.Delete
 	err := pmonmcp.Do(ctx, r.client, "unassign_role", map[string]any{
 		"principal":      principal,
 		"roleName":       role,
-		"idempotencyKey": idempotencyKey("role.unassign", principal, role),
+		"idempotencyKey": newIdempotencyKey(),
 	})
 	if err != nil && !isNotFound(err) {
 		resp.Diagnostics.AddError("Cannot unassign "+role+" from "+principal, err.Error())

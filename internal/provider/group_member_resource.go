@@ -77,7 +77,7 @@ func (r *groupMemberResource) Create(ctx context.Context, req resource.CreateReq
 	err := pmonmcp.Do(ctx, r.client, "add_group_member", map[string]any{
 		"groupName":      group,
 		"principal":      principal,
-		"idempotencyKey": idempotencyKey("group.member.add", group, principal),
+		"idempotencyKey": newIdempotencyKey(),
 	})
 	if err != nil {
 		resp.Diagnostics.AddError("Cannot add "+principal+" to the pmon group "+group, err.Error())
@@ -131,7 +131,7 @@ func (r *groupMemberResource) Delete(ctx context.Context, req resource.DeleteReq
 	err := pmonmcp.Do(ctx, r.client, "remove_group_member", map[string]any{
 		"groupName":      group,
 		"principal":      principal,
-		"idempotencyKey": idempotencyKey("group.member.remove", group, principal),
+		"idempotencyKey": newIdempotencyKey(),
 	})
 	if err != nil && !isNotFound(err) {
 		resp.Diagnostics.AddError("Cannot remove "+principal+" from the pmon group "+group, err.Error())

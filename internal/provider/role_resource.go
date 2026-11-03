@@ -92,7 +92,7 @@ func (r *roleResource) Create(ctx context.Context, req resource.CreateRequest, r
 	name := plan.Name.ValueString()
 	args := map[string]any{
 		"name":           name,
-		"idempotencyKey": idempotencyKey("role.create", name),
+		"idempotencyKey": newIdempotencyKey(),
 	}
 	if !plan.Description.IsNull() {
 		args["description"] = plan.Description.ValueString()
@@ -145,7 +145,7 @@ func (r *roleResource) Update(ctx context.Context, req resource.UpdateRequest, r
 
 	args := map[string]any{
 		"name":           current,
-		"idempotencyKey": idempotencyKey("role.update", current, wanted, plan.Description.ValueString()),
+		"idempotencyKey": newIdempotencyKey(),
 	}
 	if wanted != current {
 		args["newName"] = wanted
@@ -174,7 +174,7 @@ func (r *roleResource) Delete(ctx context.Context, req resource.DeleteRequest, r
 	name := state.Name.ValueString()
 	err := pmonmcp.Do(ctx, r.client, "delete_role", map[string]any{
 		"name":           name,
-		"idempotencyKey": idempotencyKey("role.delete", name),
+		"idempotencyKey": newIdempotencyKey(),
 	})
 	if err != nil && !isNotFound(err) {
 		resp.Diagnostics.AddError("Cannot delete the pmon role "+name, updateErrorDetail(err))
