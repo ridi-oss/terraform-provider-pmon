@@ -217,6 +217,7 @@ func (p *PmonProvider) Resources(ctx context.Context) []func() resource.Resource
 		NewRoleAssignmentResource,
 		NewMaskFnResource,
 		NewColumnClassificationResource,
+		NewWorkloadBindingResource,
 	}
 }
 
@@ -237,6 +238,7 @@ func (p *PmonProvider) DataSources(ctx context.Context) []func() datasource.Data
 		NewRoleDataSource,
 		NewGroupDataSource,
 		NewUserDataSource,
+		NewWorkloadBindingsDataSource,
 	}
 }
 

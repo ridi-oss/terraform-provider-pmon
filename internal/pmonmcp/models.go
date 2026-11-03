@@ -114,3 +114,23 @@ func (u User) InGroup(name string) bool {
 	}
 	return false
 }
+
+type WorkloadBinding struct {
+	ID          int64               `json:"id"`
+	Name        string              `json:"name"`
+	Description *string             `json:"description"`
+	Issuer      string              `json:"issuer"`
+	Subject     string              `json:"subject"`
+	Conditions  map[string][]string `json:"conditions"`
+	Principal   string              `json:"principal"`
+	Purposes    []string            `json:"purposes"`
+	MCPScopes   []string            `json:"mcpScopes"`
+	TTLSeconds  int64               `json:"ttlSeconds"`
+	Enabled     bool                `json:"enabled"`
+	CreatedAt   *string             `json:"createdAt"`
+	UpdatedAt   *string             `json:"updatedAt"`
+}
+
+type WorkloadBindings struct {
+	Bindings []WorkloadBinding `json:"bindings"`
+}
