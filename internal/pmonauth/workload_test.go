@@ -134,7 +134,7 @@ func TestWorkloadHandlerReportsExpiryInsteadOfRenewing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := source.Token(); !errors.Is(err, ErrWorkloadAccessExpired) {
+	if _, err := source.Token(); !errors.Is(err, ErrWorkloadAccessExpired) || !strings.Contains(err.Error(), "PM_OAUTH_ACCESS_TTL") {
 		t.Errorf("got %v", err)
 	}
 }

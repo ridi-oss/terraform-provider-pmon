@@ -193,7 +193,9 @@ func (p *PmonProvider) Configure(ctx context.Context, req provider.ConfigureRequ
 		}
 		if errors.Is(err, pmonauth.ErrWorkloadAccessExpired) {
 			detail += "\n\nThe access token pmon minted for this run has expired and cannot be renewed from " +
-				"here. Raise the workload binding's ttl_seconds, or split the run."
+				"here. pmon caps it at the shorter of the workload binding's ttl_seconds and its MCP access token lifetime " +
+				"(PM_OAUTH_ACCESS_TTL, 600 seconds by default), so raising ttl_seconds alone may not help. Split the run, " +
+				"or ask pmon's operator to raise PM_OAUTH_ACCESS_TTL."
 		}
 		if errors.Is(err, pmonauth.ErrStaticTokenRejected) {
 			detail += "\n\npmon access tokens last ten minutes and this one cannot be renewed from here. " +

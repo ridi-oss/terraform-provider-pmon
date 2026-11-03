@@ -25,7 +25,7 @@ import (
 
 var (
 	ErrWorkloadExchange       = errors.New("pmon refused the workload identity token")
-	ErrWorkloadAccessExpired  = errors.New("the pmon access token minted from the workload identity token has expired")
+	ErrWorkloadAccessExpired  = errors.New("the pmon access token minted from the workload identity token has expired; it lasts the shorter of the workload binding's ttl_seconds and pmon's MCP access token lifetime (PM_OAUTH_ACCESS_TTL, 600 seconds by default)")
 	ErrWorkloadAccessRejected = errors.New("pmon rejected the access token minted from the workload identity token")
 )
 
