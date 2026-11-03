@@ -30,6 +30,8 @@ var (
 
 const (
 	exchangePath      = "/api/workload/exchange"
+	revokePath        = "/oauth/revoke"
+	revokeTimeout     = 5 * time.Second
 	expiryMargin      = 10 * time.Second
 	replayWait        = 5 * time.Second
 	replayPoll        = 250 * time.Millisecond
@@ -48,6 +50,7 @@ type WorkloadOptions struct {
 type WorkloadHandler struct {
 	opts        WorkloadOptions
 	exchangeURL string
+	revokeURL   string
 
 	mu    sync.Mutex
 	token *oauth2.Token
@@ -67,7 +70,73 @@ func NewWorkloadHandler(opts WorkloadOptions) (*WorkloadHandler, error) {
 	if opts.HTTPClient == nil {
 		opts.HTTPClient = &http.Client{Timeout: 30 * time.Second}
 	}
-	return &WorkloadHandler{opts: opts, exchangeURL: exchangeURL}, nil
+	h := &WorkloadHandler{opts: opts, exchangeURL: exchangeURL, revokeURL: strings.TrimSuffix(exchangeURL, exchangePath) + revokePath}
+	openMu.Lock()
+	open = append(open, h)
+	openMu.Unlock()
+	return h, nil
+}
+
+var (
+	openMu sync.Mutex
+	open   []*WorkloadHandler
+)
+
+func CloseWorkloadHandlers(ctx context.Context) error {
+	openMu.Lock()
+	handlers := open
+	open = nil
+	openMu.Unlock()
+	var errs []error
+	for _, h := range handlers {
+		if err := h.Close(ctx); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
+func (h *WorkloadHandler) Close(ctx context.Context) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.token == nil {
+		return nil
+	}
+	access := h.token.AccessToken
+	h.token = nil
+	h.forgetCache(access)
+	return h.revoke(ctx, access)
+}
+
+func (h *WorkloadHandler) revoke(ctx context.Context, access string) error {
+	ctx, cancel := context.WithTimeout(ctx, revokeTimeout)
+	defer cancel()
+	form := url.Values{"token": {access}, "token_type_hint": {"access_token"}}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, h.revokeURL, strings.NewReader(form.Encode()))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	resp, err := h.opts.HTTPClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("revoking the workload access token at %s: %w", h.revokeURL, err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode/100 != 2 {
+		return fmt.Errorf("revoking the workload access token at %s: HTTP %d", h.revokeURL, resp.StatusCode)
+	}
+	return nil
+}
+
+func (h *WorkloadHandler) forgetCache(access string) {
+	p := h.cachePath()
+	if p == "" {
+		return
+	}
+	var cached exchangedToken
+	if raw, err := os.ReadFile(p); err == nil && json.Unmarshal(raw, &cached) == nil && cached.AccessToken == access {
+		_ = os.Remove(p)
+	}
 }
 
 func ExchangeURL(endpoint string) (string, error) {
@@ -200,6 +269,7 @@ func (h *WorkloadHandler) readCache() (exchangedToken, bool) {
 	}
 	expiry, err := time.Parse(time.RFC3339Nano, t.ExpiresAt)
 	if err != nil || time.Now().Add(expiryMargin).After(expiry) {
+		_ = os.Remove(p)
 		return t, false
 	}
 	return t, true

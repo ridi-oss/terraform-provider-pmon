@@ -191,8 +191,14 @@ let the workspace manage itself. The scopes are still only a ceiling: pmon resol
 principal's roles and evaluates Cedar on every call, and the audit trail names `svc:tf-pmon`.
 
 Each token exchanges once, and the access token lasts the shorter of the binding's `ttl_seconds`
-and pmon's MCP access token lifetime, with no refresh. Provider processes in one run share the
-exchanged token through a file in the run's temporary directory, keyed by the token. Any other CI
+and pmon's MCP access token lifetime, with no refresh. Provider processes running at the same
+time share the exchanged token through a file in the temporary directory, readable only by its
+owner (mode 0600) and keyed by the token. When the provider process exits it revokes the access
+token at pmon's `/oauth/revoke` and deletes that file, so no usable credential outlives it; a
+cache file found expired is deleted too. HCP Terraform issues a fresh token for the plan and the
+apply phase, so each phase exchanges its own. A single command that walks the graph twice with one
+token, such as a local `terraform apply` without a saved plan, cannot exchange it a second time:
+fetch a fresh token for `terraform plan -out` and for `terraform apply` of that plan. Any other CI
 works the same way with `PMON_WORKLOAD_IDENTITY_TOKEN` set to a token its platform issued, such as
 a GitHub Actions OIDC token bound by its `repo:<owner>/<repo>:environment:<env>` subject.
 

@@ -8,6 +8,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -23,12 +25,13 @@ func fakeJWT(sub string) string {
 }
 
 type exchangeServer struct {
-	srv    *httptest.Server
-	calls  atomic.Int32
-	status int
-	code   string
-	expiry time.Time
-	got    map[string]any
+	srv     *httptest.Server
+	calls   atomic.Int32
+	status  int
+	code    string
+	expiry  time.Time
+	got     map[string]any
+	revoked []string
 }
 
 func newExchangeServer(t *testing.T) *exchangeServer {
@@ -36,6 +39,12 @@ func newExchangeServer(t *testing.T) *exchangeServer {
 	es := &exchangeServer{status: http.StatusOK, expiry: time.Now().Add(10 * time.Minute)}
 	es.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		es.calls.Add(1)
+		if r.URL.Path == "/oauth/revoke" && r.Method == http.MethodPost {
+			_ = r.ParseForm()
+			es.revoked = append(es.revoked, r.PostForm.Get("token"))
+			_, _ = w.Write([]byte("{}"))
+			return
+		}
 		if r.URL.Path != "/api/workload/exchange" || r.Method != http.MethodPost || r.Header.Get("Content-Type") != "application/json" {
 			http.Error(w, "unexpected request", http.StatusTeapot)
 			return
@@ -186,4 +195,56 @@ func TestWorkloadHandlerAuthorizeNamesAMissingScope(t *testing.T) {
 	if err := h.Authorize(context.Background(), nil, &http.Response{StatusCode: http.StatusUnauthorized, Body: io.NopCloser(strings.NewReader(""))}); !errors.Is(err, ErrWorkloadAccessRejected) {
 		t.Errorf("401: %v", err)
 	}
+}
+
+func forgetOpenHandlers() {
+	openMu.Lock()
+	open = nil
+	openMu.Unlock()
+}
+
+func TestClosingTheProviderRevokesTheTokenAndDeletesItsCache(t *testing.T) {
+	forgetOpenHandlers()
+	es := newExchangeServer(t)
+	dir := t.TempDir()
+	h := es.handler(t, WorkloadOptions{CacheDir: dir})
+	if _, err := h.TokenSource(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	cached, _ := filepath.Glob(filepath.Join(dir, "pmon-workload-*.json"))
+	if len(cached) != 1 {
+		t.Fatalf("cache files %v", cached)
+	}
+	if info, err := os.Stat(cached[0]); err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("cache mode %v %v", info, err)
+	}
+	if err := CloseWorkloadHandlers(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(es.revoked) != 1 || es.revoked[0] != "pma_minted" {
+		t.Errorf("revoked %v", es.revoked)
+	}
+	if _, err := os.Stat(cached[0]); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the cache outlived the provider: %v", err)
+	}
+	if err := h.Close(context.Background()); err != nil || len(es.revoked) != 1 {
+		t.Errorf("a second close revoked again: %v %v", err, es.revoked)
+	}
+}
+
+func TestAnExpiredRunCacheIsDeletedWhenRead(t *testing.T) {
+	es := newExchangeServer(t)
+	dir := t.TempDir()
+	es.expiry = time.Now().Add(5 * time.Second)
+	if _, err := es.handler(t, WorkloadOptions{CacheDir: dir}).TokenSource(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	es.expiry = time.Now().Add(10 * time.Minute)
+	if _, err := es.handler(t, WorkloadOptions{CacheDir: dir}).TokenSource(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if n := es.calls.Load(); n != 2 {
+		t.Errorf("%d exchanges, want the stale cache ignored", n)
+	}
+	forgetOpenHandlers()
 }
