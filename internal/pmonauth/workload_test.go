@@ -248,3 +248,87 @@ func TestAnExpiredRunCacheIsDeletedWhenRead(t *testing.T) {
 	}
 	forgetOpenHandlers()
 }
+
+func TestOnlyTheLastHolderOfTheRunCacheRevokes(t *testing.T) {
+	forgetOpenHandlers()
+	es := newExchangeServer(t)
+	dir := t.TempDir()
+	first := es.handler(t, WorkloadOptions{CacheDir: dir})
+	second := es.handler(t, WorkloadOptions{CacheDir: dir})
+	for _, h := range []*WorkloadHandler{first, second} {
+		if _, err := h.TokenSource(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := es.calls.Load(); n != 1 {
+		t.Fatalf("%d exchanges, want the second handler to adopt the cache", n)
+	}
+	if err := first.Close(context.Background()); err != nil || len(es.revoked) != 0 {
+		t.Fatalf("the first close revoked a token the second still holds: %v %v", err, es.revoked)
+	}
+	cached, _ := filepath.Glob(filepath.Join(dir, "pmon-workload-*.json"))
+	if len(cached) != 1 {
+		t.Fatalf("the cache went away while the second handler holds it: %v", cached)
+	}
+	if err := second.Close(context.Background()); err != nil || len(es.revoked) != 1 || es.revoked[0] != "pma_minted" {
+		t.Fatalf("the last close did not revoke: %v %v", err, es.revoked)
+	}
+	if left, _ := filepath.Glob(filepath.Join(dir, "pmon-workload-*")); len(left) != 0 {
+		t.Errorf("files left behind: %v", left)
+	}
+	forgetOpenHandlers()
+}
+
+func TestADeadHolderDoesNotKeepTheTokenAlive(t *testing.T) {
+	forgetOpenHandlers()
+	es := newExchangeServer(t)
+	dir := t.TempDir()
+	h := es.handler(t, WorkloadOptions{CacheDir: dir})
+	if _, err := h.TokenSource(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(h.cachePath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cached exchangedToken
+	if err := json.Unmarshal(raw, &cached); err != nil || len(cached.Holders) != 1 || cached.Holders[0] != h.holder {
+		t.Fatalf("holders %+v %v", cached.Holders, err)
+	}
+	cached.Holders = append(cached.Holders, cacheHolder{PID: 1 << 30, ID: "gone"})
+	writeCacheFile(h.cachePath(), cached)
+	if err := h.Close(context.Background()); err != nil || len(es.revoked) != 1 {
+		t.Errorf("a dead holder kept the token: %v %v", err, es.revoked)
+	}
+	forgetOpenHandlers()
+}
+
+func TestTheCacheLockSerializesAndRecoversWhenStale(t *testing.T) {
+	es := newExchangeServer(t)
+	h := es.handler(t, WorkloadOptions{CacheDir: t.TempDir()})
+	lock := h.cachePath() + ".lock"
+	if err := os.WriteFile(lock, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-2 * lockStale)
+	if err := os.Chtimes(lock, old, old); err != nil {
+		t.Fatal(err)
+	}
+	ran := false
+	h.withCacheLock(func() {
+		if _, err := os.Stat(lock); err != nil {
+			t.Errorf("the lock is not held while the work runs: %v", err)
+		}
+		ran = true
+	})
+	if _, err := os.Stat(lock); !ran || !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("ran %v, lock after %v", ran, err)
+	}
+	forgetOpenHandlers()
+}
+
+func TestProcessAlive(t *testing.T) {
+	if !processAlive(os.Getpid()) || processAlive(0) || processAlive(1<<30) {
+		t.Error("processAlive misreads this process, pid 0, or an unused pid")
+	}
+}

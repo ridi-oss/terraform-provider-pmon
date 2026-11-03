@@ -3,6 +3,7 @@ package pmonauth
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -31,11 +32,14 @@ var (
 const (
 	exchangePath      = "/api/workload/exchange"
 	revokePath        = "/oauth/revoke"
-	revokeTimeout     = 5 * time.Second
+	revokeTimeout     = 1500 * time.Millisecond
 	expiryMargin      = 10 * time.Second
 	replayWait        = 5 * time.Second
 	replayPoll        = 250 * time.Millisecond
 	exchangeBodyLimit = 64 * 1024
+	lockWait          = 5 * time.Second
+	lockStale         = 10 * time.Second
+	lockPoll          = 20 * time.Millisecond
 )
 
 type WorkloadOptions struct {
@@ -51,6 +55,7 @@ type WorkloadHandler struct {
 	opts        WorkloadOptions
 	exchangeURL string
 	revokeURL   string
+	holder      cacheHolder
 
 	mu    sync.Mutex
 	token *oauth2.Token
@@ -70,7 +75,8 @@ func NewWorkloadHandler(opts WorkloadOptions) (*WorkloadHandler, error) {
 	if opts.HTTPClient == nil {
 		opts.HTTPClient = &http.Client{Timeout: 30 * time.Second}
 	}
-	h := &WorkloadHandler{opts: opts, exchangeURL: exchangeURL, revokeURL: strings.TrimSuffix(exchangeURL, exchangePath) + revokePath}
+	h := &WorkloadHandler{opts: opts, exchangeURL: exchangeURL, revokeURL: strings.TrimSuffix(exchangeURL, exchangePath) + revokePath,
+		holder: cacheHolder{PID: os.Getpid(), ID: rand.Text()}}
 	openMu.Lock()
 	open = append(open, h)
 	openMu.Unlock()
@@ -104,7 +110,9 @@ func (h *WorkloadHandler) Close(ctx context.Context) error {
 	}
 	access := h.token.AccessToken
 	h.token = nil
-	h.forgetCache(access)
+	if !h.releaseCache(access) {
+		return nil
+	}
 	return h.revoke(ctx, access)
 }
 
@@ -128,15 +136,59 @@ func (h *WorkloadHandler) revoke(ctx context.Context, access string) error {
 	return nil
 }
 
-func (h *WorkloadHandler) forgetCache(access string) {
+func (h *WorkloadHandler) releaseCache(access string) bool {
 	p := h.cachePath()
 	if p == "" {
-		return
+		return true
 	}
-	var cached exchangedToken
-	if raw, err := os.ReadFile(p); err == nil && json.Unmarshal(raw, &cached) == nil && cached.AccessToken == access {
+	last := true
+	h.withCacheLock(func() {
+		var cached exchangedToken
+		raw, err := os.ReadFile(p)
+		if err != nil || json.Unmarshal(raw, &cached) != nil || cached.AccessToken != access {
+			return
+		}
+		cached.Holders = h.otherLiveHolders(cached.Holders)
+		if len(cached.Holders) > 0 {
+			last = false
+			writeCacheFile(p, cached)
+			return
+		}
 		_ = os.Remove(p)
+	})
+	return last
+}
+
+func (h *WorkloadHandler) otherLiveHolders(holders []cacheHolder) []cacheHolder {
+	var out []cacheHolder
+	for _, c := range holders {
+		if c != h.holder && processAlive(c.PID) {
+			out = append(out, c)
+		}
 	}
+	return out
+}
+
+func (h *WorkloadHandler) withCacheLock(fn func()) {
+	lock := h.cachePath() + ".lock"
+	deadline := time.Now().Add(lockWait)
+	for {
+		f, err := os.OpenFile(lock, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+		if err == nil {
+			_ = f.Close()
+			defer func() { _ = os.Remove(lock) }()
+			break
+		}
+		if info, serr := os.Stat(lock); serr == nil && time.Since(info.ModTime()) > lockStale {
+			_ = os.Remove(lock)
+			continue
+		}
+		if !errors.Is(err, os.ErrExist) || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(lockPoll)
+	}
+	fn()
 }
 
 func ExchangeURL(endpoint string) (string, error) {
@@ -188,13 +240,19 @@ func (s expiringSource) Token() (*oauth2.Token, error) {
 }
 
 type exchangedToken struct {
-	AccessToken string `json:"accessToken"`
-	ExpiresAt   string `json:"expiresAt"`
-	Scope       string `json:"scope"`
+	AccessToken string        `json:"accessToken"`
+	ExpiresAt   string        `json:"expiresAt"`
+	Scope       string        `json:"scope"`
+	Holders     []cacheHolder `json:"holders,omitempty"`
+}
+
+type cacheHolder struct {
+	PID int    `json:"pid"`
+	ID  string `json:"id"`
 }
 
 func (h *WorkloadHandler) exchange(ctx context.Context) error {
-	if cached, ok := h.readCache(); ok {
+	if cached, ok := h.claimCache(); ok {
 		return h.adopt(cached)
 	}
 	body, _ := json.Marshal(map[string]any{"token": strings.TrimSpace(h.opts.Token), "purpose": "mcp", "scopes": nonNilScopes(h.opts.Scopes)})
@@ -281,7 +339,7 @@ func (h *WorkloadHandler) awaitCache(ctx context.Context) (exchangedToken, bool)
 	}
 	deadline := time.Now().Add(replayWait)
 	for time.Now().Before(deadline) {
-		if t, ok := h.readCache(); ok {
+		if t, ok := h.claimCache(); ok {
 			return t, true
 		}
 		select {
@@ -293,11 +351,33 @@ func (h *WorkloadHandler) awaitCache(ctx context.Context) (exchangedToken, bool)
 	return exchangedToken{}, false
 }
 
+func (h *WorkloadHandler) claimCache() (exchangedToken, bool) {
+	if h.cachePath() == "" {
+		return exchangedToken{}, false
+	}
+	var t exchangedToken
+	var ok bool
+	h.withCacheLock(func() {
+		if t, ok = h.readCache(); ok {
+			t.Holders = append(h.otherLiveHolders(t.Holders), h.holder)
+			writeCacheFile(h.cachePath(), t)
+		}
+	})
+	return t, ok
+}
+
 func (h *WorkloadHandler) writeCache(t exchangedToken) {
 	p := h.cachePath()
 	if p == "" {
 		return
 	}
+	h.withCacheLock(func() {
+		t.Holders = []cacheHolder{h.holder}
+		writeCacheFile(p, t)
+	})
+}
+
+func writeCacheFile(p string, t exchangedToken) {
 	raw, _ := json.Marshal(t)
 	tmp, err := os.CreateTemp(filepath.Dir(p), ".pmon-workload-*")
 	if err != nil {
