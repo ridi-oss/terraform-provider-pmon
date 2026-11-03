@@ -100,7 +100,7 @@ func TestWorkloadHandlerExchangesOnceForTheMCPPurpose(t *testing.T) {
 	if n := es.calls.Load(); n != 1 {
 		t.Errorf("%d exchanges", n)
 	}
-	if es.got["purpose"] != "mcp" || es.got["token"] == "" || len(es.got["scopes"].([]any)) != 1 {
+	if scopes, ok := es.got["scopes"].([]any); es.got["purpose"] != "mcp" || es.got["token"] == "" || !ok || len(scopes) != 1 {
 		t.Errorf("request %v", es.got)
 	}
 	if h.Scope() != "mcp:read" {
