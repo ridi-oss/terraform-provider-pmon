@@ -3,7 +3,6 @@ package provider
 import (
 	"context"
 	"sort"
-	"strings"
 
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
@@ -143,7 +142,7 @@ func (r *groupRolesResource) set(ctx context.Context, group string, roles []stri
 	err := pmonmcp.Do(ctx, r.client, "set_group_roles", map[string]any{
 		"groupName":      group,
 		"roleNames":      roles,
-		"idempotencyKey": idempotencyKey("group.roles", group, strings.Join(sortedCopy(roles), ",")),
+		"idempotencyKey": newIdempotencyKey(),
 	})
 	if err != nil {
 		return err

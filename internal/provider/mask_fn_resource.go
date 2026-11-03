@@ -81,7 +81,7 @@ func (r *maskFnResource) Create(ctx context.Context, req resource.CreateRequest,
 	if err := pmonmcp.Do(ctx, r.client, "create_mask_fn", map[string]any{
 		"name":           name,
 		"kind":           kind,
-		"idempotencyKey": idempotencyKey("maskfn.create", name, kind),
+		"idempotencyKey": newIdempotencyKey(),
 	}); err != nil {
 		resp.Diagnostics.AddError("Cannot create the pmon mask function "+name, err.Error())
 		return
@@ -130,7 +130,7 @@ func (r *maskFnResource) Update(ctx context.Context, req resource.UpdateRequest,
 
 	args := map[string]any{
 		"name":           current,
-		"idempotencyKey": idempotencyKey("maskfn.update", current, wanted),
+		"idempotencyKey": newIdempotencyKey(),
 	}
 	if wanted != current {
 		args["newName"] = wanted
@@ -158,7 +158,7 @@ func (r *maskFnResource) Delete(ctx context.Context, req resource.DeleteRequest,
 	name := state.Name.ValueString()
 	err := pmonmcp.Do(ctx, r.client, "delete_mask_fn", map[string]any{
 		"name":           name,
-		"idempotencyKey": idempotencyKey("maskfn.delete", name),
+		"idempotencyKey": newIdempotencyKey(),
 	})
 	if err != nil && !isNotFound(err) {
 		resp.Diagnostics.AddError("Cannot delete the pmon mask function "+name, updateErrorDetail(err))

@@ -2,7 +2,6 @@ package provider
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"regexp"
 	"slices"
@@ -262,11 +261,6 @@ func sortedStrings(s []string) []string {
 	return slices.Compact(out)
 }
 
-func bindingKey(op string, args map[string]any) string {
-	raw, _ := json.Marshal(args)
-	return idempotencyKey("workload_binding."+op, string(raw))
-}
-
 func (r *workloadBindingResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
 	var plan workloadBindingModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
@@ -277,7 +271,7 @@ func (r *workloadBindingResource) Create(ctx context.Context, req resource.Creat
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	args["idempotencyKey"] = bindingKey("create", args)
+	args["idempotencyKey"] = newIdempotencyKey()
 	created, err := pmonmcp.Call[pmonmcp.WorkloadBinding](ctx, r.client, "create_workload_binding", args)
 	if err != nil {
 		resp.Diagnostics.AddError("Cannot create the pmon workload binding "+plan.Name.ValueString(), err.Error())
@@ -329,7 +323,7 @@ func (r *workloadBindingResource) Update(ctx context.Context, req resource.Updat
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	args["idempotencyKey"] = bindingKey("update", args)
+	args["idempotencyKey"] = newIdempotencyKey()
 	updated, err := pmonmcp.Call[pmonmcp.WorkloadBinding](ctx, r.client, "update_workload_binding", args)
 	if err != nil {
 		resp.Diagnostics.AddError("Cannot update the pmon workload binding "+plan.Name.ValueString(), err.Error())
@@ -348,7 +342,7 @@ func (r *workloadBindingResource) Delete(ctx context.Context, req resource.Delet
 	name := state.Name.ValueString()
 	err := pmonmcp.Do(ctx, r.client, "delete_workload_binding", map[string]any{
 		"name":           name,
-		"idempotencyKey": idempotencyKey("workload_binding.delete", name),
+		"idempotencyKey": newIdempotencyKey(),
 	})
 	if err != nil && !isNotFound(err) {
 		resp.Diagnostics.AddError("Cannot delete the pmon workload binding "+name, err.Error())

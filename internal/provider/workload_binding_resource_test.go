@@ -110,9 +110,6 @@ func TestBindingArgsAreSortedAndOmitAnUnknownPrincipal(t *testing.T) {
 	if diags.HasError() || string(raw) != want {
 		t.Errorf("args %s %v", raw, diags)
 	}
-	if bindingKey("create", args) != bindingKey("create", bindingArgs(context.Background(), m, &diags)) {
-		t.Error("the idempotency key must depend only on the intended state")
-	}
 }
 
 func TestApplyWorkloadBindingKeepsAnUnsetConditionsNull(t *testing.T) {

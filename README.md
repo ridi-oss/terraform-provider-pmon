@@ -8,8 +8,10 @@ The provider talks to pmon's MCP administration endpoint rather than its REST AP
 first-class management surface in pmon -- it reuses the same services, transactions, and
 validators as REST -- and it addresses everything by name (`Role::"analyst"`,
 `Datasource::"example-prod-rw"`) instead of by numeric id, which makes for far more stable Terraform
-state. Every write also carries an idempotency key derived from the intended end state, so a
-retry after a dropped connection cannot apply twice.
+state. Every write carries a fresh idempotency key, because pmon keeps
+recorded keys and would replay an old outcome for a repeated one: a destroy after a recreate must
+delete again, not replay the first delete. A create whose response was lost fails on the next
+apply with "already exists"; import the object to adopt it.
 
 ## Resources
 
