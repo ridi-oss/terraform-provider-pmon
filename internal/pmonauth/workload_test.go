@@ -315,14 +315,41 @@ func TestTheCacheLockSerializesAndRecoversWhenStale(t *testing.T) {
 		t.Fatal(err)
 	}
 	ran := false
-	h.withCacheLock(func() {
+	locked := h.withCacheLock(lockWait, func() {
 		if _, err := os.Stat(lock); err != nil {
 			t.Errorf("the lock is not held while the work runs: %v", err)
 		}
 		ran = true
 	})
-	if _, err := os.Stat(lock); !ran || !errors.Is(err, os.ErrNotExist) {
-		t.Errorf("ran %v, lock after %v", ran, err)
+	if _, err := os.Stat(lock); !locked || !ran || !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("locked %v, ran %v, lock after %v", locked, ran, err)
+	}
+	forgetOpenHandlers()
+}
+
+func TestCloseKeepsTheTokenWhenTheCacheLockIsBusy(t *testing.T) {
+	forgetOpenHandlers()
+	es := newExchangeServer(t)
+	h := es.handler(t, WorkloadOptions{CacheDir: t.TempDir()})
+	if _, err := h.TokenSource(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	lock := h.cachePath() + ".lock"
+	if err := os.WriteFile(lock, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if h.withCacheLock(0, func() {}) {
+		t.Fatal("took a lock another holder has")
+	}
+	start := time.Now()
+	if err := h.Close(context.Background()); err != nil || len(es.revoked) != 0 {
+		t.Errorf("revoked without the cache lock: %v %v", err, es.revoked)
+	}
+	if took := time.Since(start); took > time.Second {
+		t.Errorf("close waited %v for the lock", took)
+	}
+	if _, err := os.Stat(h.cachePath()); err != nil {
+		t.Errorf("the cache went away without the lock: %v", err)
 	}
 	forgetOpenHandlers()
 }

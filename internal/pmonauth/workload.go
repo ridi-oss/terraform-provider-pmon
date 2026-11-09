@@ -38,7 +38,8 @@ const (
 	replayPoll        = 250 * time.Millisecond
 	exchangeBodyLimit = 64 * 1024
 	lockWait          = 5 * time.Second
-	lockStale         = 10 * time.Second
+	releaseLockWait   = 300 * time.Millisecond
+	lockStale         = 2 * time.Second
 	lockPoll          = 20 * time.Millisecond
 )
 
@@ -142,7 +143,7 @@ func (h *WorkloadHandler) releaseCache(access string) bool {
 		return true
 	}
 	last := true
-	h.withCacheLock(func() {
+	locked := h.withCacheLock(releaseLockWait, func() {
 		var cached exchangedToken
 		raw, err := os.ReadFile(p)
 		if err != nil || json.Unmarshal(raw, &cached) != nil || cached.AccessToken != access {
@@ -156,7 +157,7 @@ func (h *WorkloadHandler) releaseCache(access string) bool {
 		}
 		_ = os.Remove(p)
 	})
-	return last
+	return last && locked
 }
 
 func (h *WorkloadHandler) otherLiveHolders(holders []cacheHolder) []cacheHolder {
@@ -169,26 +170,26 @@ func (h *WorkloadHandler) otherLiveHolders(holders []cacheHolder) []cacheHolder 
 	return out
 }
 
-func (h *WorkloadHandler) withCacheLock(fn func()) {
+func (h *WorkloadHandler) withCacheLock(wait time.Duration, fn func()) bool {
 	lock := h.cachePath() + ".lock"
-	deadline := time.Now().Add(lockWait)
+	deadline := time.Now().Add(wait)
 	for {
 		f, err := os.OpenFile(lock, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 		if err == nil {
 			_ = f.Close()
 			defer func() { _ = os.Remove(lock) }()
-			break
+			fn()
+			return true
 		}
 		if info, serr := os.Stat(lock); serr == nil && time.Since(info.ModTime()) > lockStale {
 			_ = os.Remove(lock)
 			continue
 		}
 		if !errors.Is(err, os.ErrExist) || time.Now().After(deadline) {
-			break
+			return false
 		}
 		time.Sleep(lockPoll)
 	}
-	fn()
 }
 
 func ExchangeURL(endpoint string) (string, error) {
@@ -357,12 +358,15 @@ func (h *WorkloadHandler) claimCache() (exchangedToken, bool) {
 	}
 	var t exchangedToken
 	var ok bool
-	h.withCacheLock(func() {
+	claim := func() {
 		if t, ok = h.readCache(); ok {
 			t.Holders = append(h.otherLiveHolders(t.Holders), h.holder)
 			writeCacheFile(h.cachePath(), t)
 		}
-	})
+	}
+	if !h.withCacheLock(lockWait, claim) {
+		claim()
+	}
 	return t, ok
 }
 
@@ -371,10 +375,11 @@ func (h *WorkloadHandler) writeCache(t exchangedToken) {
 	if p == "" {
 		return
 	}
-	h.withCacheLock(func() {
-		t.Holders = []cacheHolder{h.holder}
-		writeCacheFile(p, t)
-	})
+	t.Holders = []cacheHolder{h.holder}
+	write := func() { writeCacheFile(p, t) }
+	if !h.withCacheLock(lockWait, write) {
+		write()
+	}
 }
 
 func writeCacheFile(p string, t exchangedToken) {
