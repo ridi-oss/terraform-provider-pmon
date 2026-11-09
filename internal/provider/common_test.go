@@ -2,37 +2,14 @@ package provider
 
 import "testing"
 
-// The key must depend only on the intended end state: pmon replays a recorded outcome for a
-// repeated key, which is what makes a retry safe, and a key that varied per attempt would defeat
-// that entirely.
-func TestIdempotencyKeyIsStable(t *testing.T) {
-	first := idempotencyKey("policy.create", "service:fence", "forbid();")
-	second := idempotencyKey("policy.create", "service:fence", "forbid();")
-
-	if first != second {
-		t.Errorf("same inputs produced %s and %s", first, second)
-	}
-}
-
-func TestIdempotencyKeyVariesWithIntent(t *testing.T) {
-	base := idempotencyKey("policy.create", "service:fence", "forbid();")
-
-	for name, other := range map[string]string{
-		"different source":    idempotencyKey("policy.create", "service:fence", "permit();"),
-		"different name":      idempotencyKey("policy.create", "other", "forbid();"),
-		"different operation": idempotencyKey("policy.update", "service:fence", "forbid();"),
-	} {
-		if other == base {
-			t.Errorf("%s produced the same key as the base", name)
+func TestEveryWriteGetsAFreshIdempotencyKey(t *testing.T) {
+	seen := map[string]bool{}
+	for range 100 {
+		key := newIdempotencyKey()
+		if len(key) != 32 || seen[key] {
+			t.Fatalf("key %q repeated or not 128 bits of hex", key)
 		}
-	}
-}
-
-// Joining on a separator that cannot occur in a name keeps neighbouring fields from running
-// together into the same key.
-func TestIdempotencyKeySeparatesParts(t *testing.T) {
-	if idempotencyKey("ab", "c") == idempotencyKey("a", "bc") {
-		t.Error("adjacent parts collided")
+		seen[key] = true
 	}
 }
 

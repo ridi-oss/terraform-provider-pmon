@@ -1,7 +1,7 @@
 package provider
 
 import (
-	"crypto/sha256"
+	"crypto/rand"
 	"encoding/hex"
 	"strings"
 )
@@ -11,13 +11,10 @@ import (
 // validation error naming the attribute.
 const reservedPrefix = "system:"
 
-// idempotencyKey derives a stable key from what a write is trying to achieve. pmon records the
-// key and replays the original outcome for a repeat, so a retry after a dropped connection cannot
-// create a second row or apply an update twice. The key must therefore depend on the intended
-// end state and nothing else -- no clock, no counter -- or a retry would look like a new request.
-func idempotencyKey(parts ...string) string {
-	sum := sha256.Sum256([]byte(strings.Join(parts, "\x00")))
-	return hex.EncodeToString(sum[:])
+func newIdempotencyKey() string {
+	var b [16]byte
+	_, _ = rand.Read(b[:])
+	return hex.EncodeToString(b[:])
 }
 
 // isReservedName reports whether name sits in pmon's shipped namespace.

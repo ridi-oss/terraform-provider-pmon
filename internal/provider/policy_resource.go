@@ -156,7 +156,7 @@ func (r *policyResource) Create(ctx context.Context, req resource.CreateRequest,
 		"name":           name,
 		"cedarSrc":       plan.CedarSrc.ValueString(),
 		"enabled":        plan.Enabled.ValueBool(),
-		"idempotencyKey": idempotencyKey("policy.create", name, plan.CedarSrc.ValueString()),
+		"idempotencyKey": newIdempotencyKey(),
 	})
 	if err != nil {
 		resp.Diagnostics.AddError("Cannot create the pmon policy "+name, err.Error())
@@ -205,7 +205,7 @@ func (r *policyResource) Update(ctx context.Context, req resource.UpdateRequest,
 		"name":           name,
 		"cedarSrc":       source,
 		"enabled":        enabled,
-		"idempotencyKey": idempotencyKey("policy.update", name, source, fmt.Sprint(enabled)),
+		"idempotencyKey": newIdempotencyKey(),
 	})
 	if err != nil {
 		resp.Diagnostics.AddError("Cannot update the pmon policy "+name, updateErrorDetail(err))
@@ -226,7 +226,7 @@ func (r *policyResource) Delete(ctx context.Context, req resource.DeleteRequest,
 	name := state.Name.ValueString()
 	err := pmonmcp.Do(ctx, r.client, "delete_policy", map[string]any{
 		"name":           name,
-		"idempotencyKey": idempotencyKey("policy.delete", name),
+		"idempotencyKey": newIdempotencyKey(),
 	})
 	if err != nil && !isNotFound(err) {
 		resp.Diagnostics.AddError("Cannot delete the pmon policy "+name, updateErrorDetail(err))

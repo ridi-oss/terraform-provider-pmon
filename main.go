@@ -9,6 +9,7 @@ import (
 	"log"
 
 	"github.com/hashicorp/terraform-plugin-framework/providerserver"
+	"github.com/ridi-oss/terraform-provider-pmon/internal/pmonauth"
 	"github.com/ridi-oss/terraform-provider-pmon/internal/provider"
 )
 
@@ -33,6 +34,9 @@ func main() {
 	}
 
 	err := providerserver.Serve(context.Background(), provider.New(version), opts)
+	if cerr := pmonauth.CloseWorkloadHandlers(context.Background()); cerr != nil {
+		log.Print(cerr.Error())
+	}
 
 	if err != nil {
 		log.Fatal(err.Error())
